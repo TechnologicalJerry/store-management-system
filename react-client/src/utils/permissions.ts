@@ -1,0 +1,2 @@
+// Role permissions map
+
