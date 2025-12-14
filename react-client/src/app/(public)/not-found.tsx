@@ -1,27 +1,44 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function NotFound() {
+  const router = useRouter();
+
+  const handleGoBack = () => {
+    if (window.history.length > 1) {
+      router.back();
+    } else {
+      router.push("/");
+    }
+  };
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="text-center px-4">
-        <h1 className="text-9xl font-bold text-blue-600 mb-4">404</h1>
-        <h2 className="text-3xl font-semibold text-gray-800 mb-4">Page Not Found</h2>
-        <p className="text-gray-600 mb-8 max-w-md mx-auto">
-          Sorry, we couldn't find the page you're looking for. The page might have been moved,
-          deleted, or the URL might be incorrect.
-        </p>
-        <div className="flex gap-4 justify-center">
+    <div className="min-h-screen bg-black flex items-center justify-center px-4">
+      <div className="w-full max-w-4xl">
+        {/* Main 404 Content */}
+        <div className="flex flex-col md:flex-row items-center md:items-start gap-6 md:gap-8 mb-16">
+          <h1 className="text-8xl md:text-9xl font-light text-white leading-none">404</h1>
+          <div className="hidden md:block w-px h-20 bg-white"></div>
+          <p className="text-white text-lg md:text-xl font-light max-w-md">
+            This page could not be found.
+          </p>
+        </div>
+
+        {/* Navigation Buttons */}
+        <div className="flex flex-col sm:flex-row gap-4 justify-center md:justify-start">
+          <button
+            onClick={handleGoBack}
+            className="text-white border border-white px-6 py-3 font-light hover:bg-white hover:text-black transition-all duration-200"
+          >
+            ← Go Back
+          </button>
           <Link
             href="/"
-            className="bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
+            className="text-white border border-white px-6 py-3 font-light hover:bg-white hover:text-black transition-all duration-200 text-center"
           >
             Go Home
-          </Link>
-          <Link
-            href="/contact"
-            className="bg-gray-200 text-gray-800 px-6 py-3 rounded-lg font-semibold hover:bg-gray-300 transition-colors"
-          >
-            Contact Us
           </Link>
         </div>
       </div>
