@@ -1,0 +1,31 @@
+# ==============================================================================
+# Store Management System - Fastify Backend Docker Compose
+# ==============================================================================
+# NOTE: Stage 1 establishes process foundation, health endpoints, and security.
+# Database (PostgreSQL) will be introduced in Stage 2.
+# Cache & Queues (Redis / BullMQ) will be introduced in Stage 4.
+# ==============================================================================
+
+services:
+  fastify-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: store-management-fastify-api
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - HOST=0.0.0.0
+      - PORT=3000
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - API_PREFIX=${API_PREFIX:-/api/v1}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      - SWAGGER_ENABLED=${SWAGGER_ENABLED:-true}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health/live').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
