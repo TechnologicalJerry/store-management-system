@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+tests
+docs
+.git
+.gitignore
+.dockerignore
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+README.md
+eslint.config.js
+.prettierrc.json
