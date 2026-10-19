@@ -18,10 +18,11 @@ WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY tsconfig.json package.json ./
+COPY prisma/ ./prisma/
 COPY src/ ./src/
 
-# Compile TypeScript into JavaScript (dist)
-RUN npm run build
+# Generate Prisma client and compile TypeScript into JavaScript (dist)
+RUN npx prisma generate && npm run build
 
 # --- Stage 3: Production Runner ---
 FROM node:22-alpine AS runner
@@ -33,7 +34,12 @@ ENV PORT=3000
 
 # Copy dependency manifests and install production-only dependencies
 COPY package.json package-lock.json ./
+COPY prisma/ ./prisma/
 RUN npm ci --omit=dev && npm cache clean --force
+
+# Copy generated Prisma client artifacts from builder
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
 # Copy compiled JavaScript output from builder stage
 COPY --from=builder /app/dist ./dist
