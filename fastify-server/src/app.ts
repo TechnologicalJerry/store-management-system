@@ -1,15 +1,27 @@
 import fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import type { PrismaClient } from '@prisma/client';
 import { type Env, getEnv } from './config/env.js';
 import { createLoggerOptions, generateOrValidateRequestId } from './common/utils/logger.js';
 import { registerSecurityPlugins } from './plugins/security.js';
 import { registerSwagger } from './plugins/swagger.js';
 import { registerErrorHandler, registerNotFoundHandler } from './common/errors/error-handler.js';
 import { healthRoutes } from './modules/health/health.routes.js';
+import { healthService } from './modules/health/health.service.js';
+import { databasePlugin } from './infrastructure/database/database.plugin.js';
+import { checkDatabaseConnection } from './infrastructure/database/prisma-client.js';
 
 export interface BuildAppOptions {
   env?: Env;
   fastifyOptions?: FastifyServerOptions;
   disableRateLimit?: boolean;
+  /**
+   * Mock or custom PrismaClient instance for testing isolation.
+   */
+  prismaOverride?: PrismaClient;
+  /**
+   * Option to skip database plugin registration (e.g. for lightweight unit tests).
+   */
+  skipDatabasePlugin?: boolean;
 }
 
 /**
@@ -46,7 +58,31 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // 4. Register OpenAPI Swagger Documentation (if enabled)
   await registerSwagger(app, env);
 
-  // 5. Register Versioned API Routes under API Prefix (e.g. /api/v1)
+  // 5. Register Database Infrastructure & Health Integration (Stage 2)
+  if (!options.skipDatabasePlugin) {
+    await app.register(databasePlugin, {
+      env,
+      prismaOverride: options.prismaOverride,
+    });
+
+    // Register bounded PostgreSQL readiness check
+    healthService.registerReadinessCheck('database', async () => {
+      const result = await checkDatabaseConnection(app.prisma, 3000);
+      if (result.isConnected) {
+        return {
+          status: 'up',
+          message: 'PostgreSQL database connection is operational',
+          latencyMs: result.latencyMs,
+        };
+      }
+      return {
+        status: 'down',
+        message: 'PostgreSQL database connection is unavailable',
+      };
+    });
+  }
+
+  // 6. Register Versioned API Routes under API Prefix (e.g. /api/v1)
   await app.register(
     async apiV1 => {
       // Health observability probes
