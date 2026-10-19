@@ -2,147 +2,139 @@
 
 ## Current Status Overview
 
-- **Current Stage:** Stage 1: Project Foundation — Code Implementation Only
-- **Status:** **Implemented, pending verification**
-- **Verification Rule:** In accordance with the project instructions, no terminal execution, compilation, testing, or container commands were executed during this stage. Verification is deferred until all implementation stages are complete.
+- **Stage 1 (Project Foundation):** **Implemented, pending verification**
+- **Stage 2 (Database and Persistence Layer):** **Implemented, pending verification**
+- **Verification Rule:** In accordance with the mandatory project rules, no terminal execution, package installation, compilation, migration, testing, or container commands were executed during these stages. All verification is deferred until all 10 implementation stages are complete.
 
 ---
 
-## 1. Stage 1 Scope & Features Implemented
+## 1. Stage 2 Scope & Features Implemented
 
-### A. Project Configuration & Build System
-- Configured ECMAScript Modules (`"type": "module"`) with NodeNext module resolution.
-- Enforced strict TypeScript settings (`strict: true`, `noImplicitAny: true`, `noUncheckedIndexedAccess: true`, `noUnusedLocals: true`, etc.).
-- Established lifecycle scripts for development (`tsx watch`), production build (`rimraf` + `tsc`), production startup (`node dist/server.js`), testing (`vitest`), linting (`eslint`), formatting (`prettier`), and type checking (`tsc --noEmit`).
-- Created ESLint 9 Flat Config (`eslint.config.js`) with `@typescript-eslint` rules and Prettier configuration (`.prettierrc.json`).
-- Pinned exact dependency versions in `package.json` and established a reproducible `package-lock.json` manifest.
+### A. PostgreSQL 17 Persistence & Prisma ORM Integration
+- Integrated Prisma ORM `v6.4.0` with `@prisma/adapter-pg` driver adapter and `pg` `v8.13.3` connection pool.
+- Established client pooling controls with `DB_POOL_MAX` and `DB_CONNECTION_TIMEOUT_MS`.
+- Configured Prisma Client generation, migration scripts (`prisma:migrate:dev`, `prisma:migrate:deploy`, `prisma:migrate:status`), and visual studio (`prisma:studio`).
 
-### B. Application Factory & Bootstrap Separation
-- `src/app.ts`: Implemented `buildApp()` application factory returning a fully initialized Fastify instance without binding to network sockets, enabling fast, isolated integration testing via Fastify injection.
-- `src/server.ts`: Implemented clean server lifecycle management, environment validation on startup, port listening, uncaught exception hooks, unhandled rejection hooks, and idempotent graceful shutdown (`SIGTERM`, `SIGINT`).
+### B. Foundational Relational Schema & Migration Artifacts
+- `prisma/schema.prisma`: Defined minimal foundational `SystemSetting` entity mapped to `system_settings` table:
+  - UUID primary key with native PostgreSQL `gen_random_uuid()` generator.
+  - Unique setting key (`VARCHAR(100)`).
+  - JSON-compatible payload (`JSONB`).
+  - Read-only flag and time-zone-aware timestamps (`TIMESTAMPTZ(6)`).
+- `prisma/migrations/20261019000000_init_foundation/migration.sql`: Created initial PostgreSQL DDL migration with extensions, tables, primary keys, and indexes.
 
-### C. Type-Safe Environment Validation
-- `src/config/env.ts`: Centralized Zod schema validation for runtime environment variables (`NODE_ENV`, `HOST`, `PORT`, `LOG_LEVEL`, `API_PREFIX`, `CORS_ORIGINS`, `SWAGGER_ENABLED`).
-- Prevents silent fallback on malformed values; rejects invalid ports (outside 1–65535), unknown environment names, and prohibits wildcard CORS (`*`) in production.
-- Created `.env.example` documenting all configuration keys.
+### C. Database Lifecycle & Fastify Plugin Architecture
+- `src/infrastructure/database/prisma-client.ts`: Implemented `createPrismaClient()`, bounded connectivity tester (`checkDatabaseConnection()`), and pool draining (`disconnectPrisma()`).
+- `src/infrastructure/database/database.plugin.ts`: Created Fastify plugin with `fastify-plugin` decorating `app.prisma` across encapsulation scopes and registering an `onClose` hook to cleanly close database pools on server shutdown.
+- `src/types/fastify.d.ts`: Augmented `FastifyInstance` with `prisma: PrismaClient`.
 
-### D. Structured Logging & Request Tracking
-- `src/common/utils/logger.ts`: Configured Pino logger integration with environment-sensitive formatting (pretty-printing in development, structured JSON in production).
-- Request ID correlation via `x-request-id` header with regex validation (`^[a-zA-Z0-9_-]{1,64}$`) to prevent log injection; falls back to `crypto.randomUUID()`.
-- Automatic redaction of sensitive data (`authorization`, `cookie`, `set-cookie`, `password`, `token`, `secret`, `creditCard`).
+### D. Repository Layer & Domain Boundaries
+- `src/infrastructure/database/repositories/system-setting.repository.ts`: Implemented `SystemSettingRepository` isolating domain logic from Prisma queries.
+- Clean DTO mapping preventing leakage of raw database entity structures to HTTP routes.
+- Transactional awareness supporting optional `DatabaseTransactionClient` (`tx`) propagation.
 
-### E. Security Hardening & Rate Limiting
-- `src/plugins/security.ts`: Registered `@fastify/helmet` with hardened HTTP headers (XSS filter, frameguard, nosniff, referrer-policy, HSTS in production).
-- `@fastify/cors`: Strict CORS origin allowlist parsing with credentials support; wildcard origins blocked in production.
-- `@fastify/rate-limit`: Rate limiting protection with standardized error responses on breach.
-- Payload limit configured to 1MB (`bodyLimit: 1048576`).
+### E. Health Probe & Readiness Integration
+- `src/modules/health/health.service.ts`: Extended readiness probe with registered `database` check.
+- Bounded connectivity check (`SELECT 1` with 3,000ms timeout) that reports `{ status: 'up', latencyMs }` or `{ status: 'down' }`.
+- Guarantees `GET /api/v1/health/live` remains lightweight and independent of database availability.
+- When database connectivity fails, `GET /api/v1/health/ready` returns HTTP 503 without leaking connection strings or credentials.
 
-### F. Centralized Error Handling & RFC Compliance
-- `src/common/errors/app-error.ts`: Domain error hierarchy (`AppError`, `BadRequestError`, `ValidationError`, `UnauthorizedError`, `ForbiddenError`, `NotFoundError`, `ConflictError`, `PayloadTooLargeError`, `TooManyRequestsError`, `InternalServerError`, `ServiceUnavailableError`).
-- `src/common/errors/error-handler.ts`: Fastify error handler transforming schema validation errors, rate-limit errors, operational domain errors, and unhandled exceptions into uniform JSON structures (`statusCode`, `error`, `code`, `message`, `details`, `requestId`, `timestamp`).
-- Safe 500 responses in production that conceal internal stack traces from clients while logging them internally.
-- Custom 404 handler for unknown routes.
+### F. Database Error Interception & Sanitization
+- `src/infrastructure/database/database.errors.ts`: Mapped known Prisma error codes:
+  - `P2002` -> `ConflictError` (`409 Conflict`, code `'UNIQUE_CONSTRAINT_VIOLATION'`).
+  - `P2025` -> `NotFoundError` (`404 Not Found`, code `'NOT_FOUND'`).
+  - `P2003` -> `BadRequestError` (`400 Bad Request`, code `'FOREIGN_KEY_VIOLATION'`).
+  - `P2024`, `P1001` -> `ServiceUnavailableError` (`503 Service Unavailable`, code `'SERVICE_UNAVAILABLE'`).
+- `src/common/errors/error-handler.ts`: Central Fastify error handler updated to automatically intercept unhandled Prisma errors, sanitize details, and emit RFC-compliant JSON responses.
 
-### G. Health & Observability Probes
-- `src/modules/health/health.service.ts`: Implemented `getLiveness()` (lightweight process probe) and `getReadiness()` (subsystem traffic readiness).
-- Extensible probe registry (`registerReadinessCheck()`) allowing future stages (PostgreSQL, Redis, BullMQ) to register dependency health checks without altering core service code.
-- `src/modules/health/health.routes.ts` & `src/modules/health/health.schema.ts`: Exposed `GET /api/v1/health/live` and `GET /api/v1/health/ready` with OpenAPI schemas.
+### G. Idempotent Seed Infrastructure
+- `prisma/seed.ts`: Implemented deterministic seed script populating non-sensitive system settings (`system.initialized`, `system.app_name`, `system.default_currency`, `system.timezone`).
+- No hardcoded administrator credentials, passwords, or mock business data.
 
-### H. OpenAPI 3.0 Documentation
-- `src/plugins/swagger.ts`: Integrated `@fastify/swagger` and `@fastify/swagger-ui`.
-- Configured API Title: `Store Management System API`, version `1.0.0`, versioned prefix `/api/v1`, health endpoint contracts, and error schemas.
-- Document UI conditionally enabled via `SWAGGER_ENABLED` (disabled by default in production).
+### H. Local Docker Compose Infrastructure
+- `docker-compose.yml`: Added `postgres` service with official `postgres:17-alpine`, persistent named volume (`store-management-postgres-data`), health check (`pg_isready`), and service dependency in `fastify-api`.
 
 ### I. Comprehensive Test Suite (Create-Only)
-- `tests/unit/env.test.ts`: Tests environment variable parsing, default values, port range boundaries, and production CORS validation.
-- `tests/unit/health.service.test.ts`: Tests liveness payload, readiness evaluation, custom check registration, and failure detection.
-- `tests/unit/app-error.test.ts`: Tests error hierarchy status codes, operational flags, and error codes.
-- `tests/integration/app.test.ts`: Tests factory construction without socket binding and plugin registration.
-- `tests/integration/health.test.ts`: Tests `/api/v1/health/live` and `/api/v1/health/ready` via Fastify injection.
-- `tests/integration/security.test.ts`: Tests Helmet headers, CORS allowlist matching, and 1MB payload limits.
-- `tests/integration/error-handling.test.ts`: Tests 404 route handling, AppError formatting, and correlation ID propagation.
-
-### J. Containerization Manifests
-- `Dockerfile`: Multi-stage build (`deps`, `builder`, `runner`) on Alpine Linux, running as non-root user `node`, built-in container healthcheck.
-- `docker-compose.yml`: Standalone configuration for `fastify-api` service.
+- `tests/unit/database.test.ts`: Bounded query ping, timeout threshold, and pool disconnection tests.
+- `tests/unit/database-errors.test.ts`: Prisma error code detection, sanitization, and `AppError` mapping tests.
+- `tests/unit/system-setting.repository.test.ts`: Repository CRUD methods, error translation, and transaction client propagation tests.
+- `tests/integration/database.plugin.test.ts`: Fastify plugin decoration, route accessibility, and shutdown hook tests.
+- `tests/integration/database-health.test.ts`: Real health check integration verifying readiness returns 200 when database is healthy and 503 when down, while liveness remains 200.
 
 ---
 
-## 2. Inventory of Created Files
+## 2. Inventory of Created or Modified Files (Stage 2)
 
-| File Path | Responsibility |
-|---|---|
-| `package.json` | Project metadata, pinned dependencies, ESM definition, scripts |
-| `package-lock.json` | Deterministic dependency lockfile |
-| `tsconfig.json` | Strict TypeScript compiler options with NodeNext resolution |
-| `eslint.config.js` | ESLint v9 Flat Config with TypeScript rules |
-| `.prettierrc.json` | Prettier code formatting rules |
-| `vitest.config.ts` | Vitest testing configuration and coverage exclusions |
-| `.gitignore` | Version control exclusions |
-| `.dockerignore` | Docker build context exclusions |
-| `.env.example` | Template for environment variable configuration |
-| `Dockerfile` | Multi-stage production container manifest |
-| `docker-compose.yml` | Local container composition service |
-| `src/app.ts` | Reusable application factory and plugin composition |
-| `src/server.ts` | Process bootstrap, network listener, signal handling & graceful shutdown |
-| `src/config/env.ts` | Zod environment configuration validation schema |
-| `src/plugins/security.ts` | Helmet, CORS, and Rate Limiting Fastify plugins |
-| `src/plugins/swagger.ts` | OpenAPI 3.0 specification & Swagger UI documentation |
-| `src/common/types/index.ts` | Shared API response and health status contracts |
-| `src/common/errors/app-error.ts` | Operational error classes and HTTP status mappings |
-| `src/common/errors/error-handler.ts` | Fastify centralized error handler and 404 router |
-| `src/common/errors/index.ts` | Error module barrel exports |
-| `src/common/utils/logger.ts` | Pino configuration, header redaction, request ID validation |
-| `src/common/utils/index.ts` | Utilities module barrel exports |
-| `src/modules/health/health.schema.ts` | Fastify route schemas for OpenAPI |
-| `src/modules/health/health.service.ts` | Liveness and extensible readiness evaluation |
-| `src/modules/health/health.routes.ts` | Fastify route definitions for `/live` and `/ready` |
-| `src/modules/health/index.ts` | Health module barrel exports |
-| `src/infrastructure/index.ts` | Architectural boundaries for external clients (Stage 2+) |
-| `src/types/fastify.d.ts` | Module augmentation for Fastify types |
-| `src/types/index.ts` | Global type re-exports |
-| `tests/unit/env.test.ts` | Unit tests for Zod environment validation |
-| `tests/unit/health.service.test.ts` | Unit tests for HealthService probes |
-| `tests/unit/app-error.test.ts` | Unit tests for AppError hierarchy |
-| `tests/integration/app.test.ts` | Integration tests for application factory |
-| `tests/integration/health.test.ts` | Integration tests for health endpoints |
-| `tests/integration/security.test.ts` | Integration tests for security headers, CORS, and limits |
-| `tests/integration/error-handling.test.ts` | Integration tests for 404s, AppErrors, and correlation IDs |
-| `README.md` | Comprehensive project documentation and operations guide |
-| `docs/implementation-status.md` | Implementation tracking and status report |
+| File Path | Action | Responsibility |
+|---|---|---|
+| `package.json` | Modified | Added Prisma 6, `@prisma/adapter-pg`, `pg`, `fastify-plugin`, and migration/seed scripts |
+| `package-lock.json` | Modified | Pinned dependency lockfile updated for Prisma and PostgreSQL packages |
+| `Dockerfile` | Modified | Multi-stage build updated to copy schema and generate Prisma client artifacts |
+| `docker-compose.yml` | Modified | Added PostgreSQL 17 service with healthcheck and named volume |
+| `prisma/schema.prisma` | Created | Prisma schema with PostgreSQL datasource and `SystemSetting` model |
+| `prisma/seed.ts` | Created | Idempotent foundational database seed script |
+| `prisma/migrations/20261019000000_init_foundation/migration.sql` | Created | Initial PostgreSQL DDL migration script |
+| `src/config/env.ts` | Modified | Added validation for `DATABASE_URL`, `DATABASE_DIRECT_URL`, `DB_POOL_MAX`, `DB_CONNECTION_TIMEOUT_MS` |
+| `.env.example` | Modified | Documented database environment variables with placeholders |
+| `src/app.ts` | Modified | Registered `databasePlugin` and wired database readiness probe |
+| `src/types/fastify.d.ts` | Modified | Augmented FastifyInstance with `app.prisma` |
+| `src/infrastructure/index.ts` | Modified | Re-exported database module and updated layer boundaries |
+| `src/infrastructure/database/database.types.ts` | Created | DTOs, domain records, and repository interfaces |
+| `src/infrastructure/database/database.errors.ts` | Created | Prisma error detection, mapping, and sanitization |
+| `src/infrastructure/database/prisma-client.ts` | Created | Connection pool setup, client factory, and bounded ping helper |
+| `src/infrastructure/database/database.plugin.ts` | Created | Fastify plugin decorating `app.prisma` with lifecycle shutdown |
+| `src/infrastructure/database/repositories/system-setting.repository.ts` | Created | Domain repository implementation for system settings |
+| `src/infrastructure/database/index.ts` | Created | Barrel export for database module |
+| `src/common/errors/error-handler.ts` | Modified | Intercepts Prisma errors and maps to safe domain error responses |
+| `src/common/utils/logger.ts` | Modified | Added redaction paths for database credentials and connection strings |
+| `docs/transaction-strategy.md` | Created | Transaction models, isolation levels, concurrency control, and deadlock guidance |
+| `tests/unit/env.test.ts` | Modified | Added unit tests for database configuration validation |
+| `tests/unit/database.test.ts` | Created | Unit tests for ping queries, timeouts, and pool closing |
+| `tests/unit/database-errors.test.ts` | Created | Unit tests for Prisma error mapping and credential sanitization |
+| `tests/unit/system-setting.repository.test.ts` | Created | Unit tests for repository methods and transaction clients |
+| `tests/integration/database.plugin.test.ts` | Created | Integration tests for Fastify plugin decoration and hooks |
+| `tests/integration/database-health.test.ts` | Created | Integration tests for database readiness and liveness isolation |
+| `tests/integration/app.test.ts` | Modified | Updated with prisma mock for isolated execution |
+| `tests/integration/health.test.ts` | Modified | Updated with prisma mock for isolated execution |
+| `tests/integration/security.test.ts` | Modified | Updated with prisma mock for isolated execution |
+| `tests/integration/error-handling.test.ts` | Modified | Added integration test for Prisma error interception |
+| `README.md` | Modified | Documented PostgreSQL architecture, Prisma commands, and health probes |
+| `docs/implementation-status.md` | Modified | Updated implementation tracker for Stage 2 |
 
 ---
 
 ## 3. Checks Intentionally Not Run
 
-Under the **Strict Execution Restriction** for Stage 1 code implementation:
+Under the **Strict No-Execution Rule** for code-only implementation:
 
 | Check | Status | Reason |
 |---|---|---|
-| Dependency Installation (`npm install` / `npm ci`) | **Not Run** | Explicitly restricted in code-only implementation phase |
+| Dependency Installation (`npm ci`) | **Not Run** | Explicitly restricted in code-only implementation phase |
+| Prisma Client Generation (`prisma generate`) | **Not Run** | Explicitly restricted in code-only implementation phase |
+| Prisma Migrations (`prisma migrate dev/deploy`) | **Not Run** | Explicitly restricted in code-only implementation phase |
+| Database Seeding (`tsx prisma/seed.ts`) | **Not Run** | Explicitly restricted in code-only implementation phase |
 | TypeScript Type Checking (`npm run typecheck`) | **Not Run** | Explicitly restricted in code-only implementation phase |
 | ESLint Verification (`npm run lint`) | **Not Run** | Explicitly restricted in code-only implementation phase |
 | Prettier Check (`npm run format:check`) | **Not Run** | Explicitly restricted in code-only implementation phase |
 | Vitest Test Suite (`npm run test`) | **Not Run** | Explicitly restricted in code-only implementation phase |
 | Production Build (`npm run build`) | **Not Run** | Explicitly restricted in code-only implementation phase |
-| Server Startup (`npm run start` / `npm run dev`) | **Not Run** | Explicitly restricted in code-only implementation phase |
+| Server Startup (`npm run dev` / `start`) | **Not Run** | Explicitly restricted in code-only implementation phase |
 | Docker Build & Compose (`docker compose up`) | **Not Run** | Explicitly restricted in code-only implementation phase |
 
 ---
 
-## 4. Known Limitations (Intentionally Out of Scope for Stage 1)
+## 4. Known Limitations (Intentionally Out of Scope for Stage 2)
 
-1. **No Database Integration:** PostgreSQL client, connection pooling, and Prisma schemas are intentionally absent (scheduled for Stage 2).
-2. **No Authentication / Authorization:** JWT signing, password hashing, user models, and permission guards are not yet implemented (scheduled for Stage 3).
-3. **No Distributed Caching or Queues:** Redis client and BullMQ workers are not initialized (scheduled for Stage 4).
-4. **No Business Domain Models:** Stores, inventory, products, orders, customers, and payments are strictly reserved for Stages 5–10.
+1. **No Authentication / User Accounts:** User tables, password hashing, JWT sessions, and RBAC guards are intentionally deferred (Stage 3).
+2. **No Redis or Message Queues:** Caching and background job processing are deferred (Stage 4).
+3. **No Business Domain Models:** Multi-store architecture, product catalog, inventory balances, purchase orders, sales transactions, and reporting remain strictly assigned to Stages 5–10.
 
 ---
 
 ## 5. Development Roadmap Progress
 
 - [x] **Stage 1: Project Foundation** — **Implemented, pending verification**
-- [ ] **Stage 2: Database Architecture & Prisma ORM Integration (PostgreSQL)** — Remaining
+- [x] **Stage 2: Database and Persistence Layer** — **Implemented, pending verification**
 - [ ] **Stage 3: Authentication, Session Management & JWT Security** — Remaining
 - [ ] **Stage 4: Caching Layer & Background Job Processing (Redis, BullMQ)** — Remaining
 - [ ] **Stage 5: Multi-Store Architecture & Role-Based Access Control (RBAC)** — Remaining
