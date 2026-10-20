@@ -108,4 +108,45 @@ describe('Environment Configuration Validation (Unit)', () => {
       /DB_CONNECTION_TIMEOUT_MS/
     );
   });
+
+  it('should parse Stage 3 auth environment variables and apply secure defaults', () => {
+    const config = loadEnv(baseValidEnv);
+    expect(config.JWT_ACCESS_SECRET).toBeDefined();
+    expect(config.JWT_ACCESS_TTL).toBe('15m');
+    expect(config.JWT_ISSUER).toBe('store-management-system');
+    expect(config.JWT_AUDIENCE).toBe('store-management-system-api');
+    expect(config.REFRESH_TOKEN_TTL_DAYS).toBe(7);
+    expect(config.MAX_ACTIVE_SESSIONS).toBe(2);
+    expect(config.AUTH_COOKIE_NAME).toBe('refresh_token');
+    expect(config.COOKIE_SECRET).toBeDefined();
+  });
+
+  it('should reject JWT_ACCESS_SECRET shorter than 32 characters', () => {
+    expect(() =>
+      loadEnv({
+        ...baseValidEnv,
+        JWT_ACCESS_SECRET: 'too-short-secret',
+      })
+    ).toThrow(/JWT_ACCESS_SECRET/);
+  });
+
+  it('should reject default dev secrets in production environment', () => {
+    expect(() =>
+      loadEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'production',
+        CORS_ORIGINS: 'https://admin.store.com',
+      })
+    ).toThrow(/JWT_ACCESS_SECRET must be set to a secure, unique secret in production/);
+  });
+
+  it('should reject MAX_ACTIVE_SESSIONS outside allowed bounds (1 to 10)', () => {
+    expect(() => loadEnv({ ...baseValidEnv, MAX_ACTIVE_SESSIONS: '0' })).toThrow(
+      /MAX_ACTIVE_SESSIONS/
+    );
+    expect(() => loadEnv({ ...baseValidEnv, MAX_ACTIVE_SESSIONS: '15' })).toThrow(
+      /MAX_ACTIVE_SESSIONS/
+    );
+  });
 });
+
