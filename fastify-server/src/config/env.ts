@@ -25,6 +25,9 @@ const booleanFromEnv = (defaultValue: boolean) =>
     })
     .default(defaultValue);
 
+const DEV_JWT_SECRET = 'dev-jwt-access-secret-minimum-32-chars-long!!';
+const DEV_COOKIE_SECRET = 'dev-cookie-secret-minimum-32-chars-long!!';
+
 /**
  * Zod schema defining the environment configuration contract.
  */
@@ -118,6 +121,45 @@ export const envSchema = z
           .max(60000, 'DB_CONNECTION_TIMEOUT_MS cannot exceed 60000ms')
       )
       .default(5000),
+
+    // =========================================================================
+    // Stage 3: Authentication, JWT & Session Security Configuration
+    // =========================================================================
+    JWT_ACCESS_SECRET: z
+      .string()
+      .min(32, 'JWT_ACCESS_SECRET must be at least 32 characters long for cryptographic security')
+      .default(DEV_JWT_SECRET),
+    JWT_ACCESS_TTL: z
+      .string()
+      .regex(/^[0-9]+[smhd]$/, 'JWT_ACCESS_TTL must be a valid time span (e.g. 15m, 1h)')
+      .default('15m'),
+    JWT_ISSUER: z.string().min(1).default('store-management-system'),
+    JWT_AUDIENCE: z.string().min(1).default('store-management-system-api'),
+    REFRESH_TOKEN_TTL_DAYS: z
+      .preprocess(
+        val => (typeof val === 'string' ? parseInt(val, 10) : val),
+        z
+          .number({ invalid_type_error: 'REFRESH_TOKEN_TTL_DAYS must be a number' })
+          .int()
+          .min(1, 'REFRESH_TOKEN_TTL_DAYS must be at least 1 day')
+          .max(90, 'REFRESH_TOKEN_TTL_DAYS cannot exceed 90 days')
+      )
+      .default(7),
+    MAX_ACTIVE_SESSIONS: z
+      .preprocess(
+        val => (typeof val === 'string' ? parseInt(val, 10) : val),
+        z
+          .number({ invalid_type_error: 'MAX_ACTIVE_SESSIONS must be a number' })
+          .int()
+          .min(1, 'MAX_ACTIVE_SESSIONS must be at least 1')
+          .max(10, 'MAX_ACTIVE_SESSIONS cannot exceed 10')
+      )
+      .default(2),
+    AUTH_COOKIE_NAME: z.string().min(1).default('refresh_token'),
+    COOKIE_SECRET: z
+      .string()
+      .min(32, 'COOKIE_SECRET must be at least 32 characters long for cryptographic security')
+      .default(DEV_COOKIE_SECRET),
   })
   .superRefine((data, ctx) => {
     // In production, enforce that CORS_ORIGINS does not include a wildcard '*'
@@ -128,6 +170,24 @@ export const envSchema = z
           message:
             'Wildcard CORS origin (*) is not allowed in production environment. Specify explicit origins.',
           path: ['CORS_ORIGINS'],
+        });
+      }
+
+      if (data.JWT_ACCESS_SECRET === DEV_JWT_SECRET) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            'JWT_ACCESS_SECRET must be set to a secure, unique secret in production environment.',
+          path: ['JWT_ACCESS_SECRET'],
+        });
+      }
+
+      if (data.COOKIE_SECRET === DEV_COOKIE_SECRET) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            'COOKIE_SECRET must be set to a secure, unique secret in production environment.',
+          path: ['COOKIE_SECRET'],
         });
       }
     }
