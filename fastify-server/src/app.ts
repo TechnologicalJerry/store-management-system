@@ -1,4 +1,5 @@
 import fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import fastifyCookie from '@fastify/cookie';
 import type { PrismaClient } from '@prisma/client';
 import { type Env, getEnv } from './config/env.js';
 import { createLoggerOptions, generateOrValidateRequestId } from './common/utils/logger.js';
@@ -9,6 +10,8 @@ import { healthRoutes } from './modules/health/health.routes.js';
 import { healthService } from './modules/health/health.service.js';
 import { databasePlugin } from './infrastructure/database/database.plugin.js';
 import { checkDatabaseConnection } from './infrastructure/database/prisma-client.js';
+import { authenticationPlugin } from './plugins/authentication.js';
+import { authRoutes } from './modules/auth/auth.routes.js';
 
 export interface BuildAppOptions {
   env?: Env;
@@ -55,6 +58,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     rateLimitMax: options.disableRateLimit ? 100000 : 100,
   });
 
+  // Register Cookie Plugin for secure Refresh Token transport (Stage 3)
+  await app.register(fastifyCookie, {
+    secret: env.COOKIE_SECRET,
+    hook: 'onRequest',
+  });
+
   // 4. Register OpenAPI Swagger Documentation (if enabled)
   await registerSwagger(app, env);
 
@@ -64,6 +73,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       env,
       prismaOverride: options.prismaOverride,
     });
+
+    // Register Authentication Plugin (Stage 3)
+    await app.register(authenticationPlugin);
 
     // Register bounded PostgreSQL readiness check
     healthService.registerReadinessCheck('database', async () => {
@@ -87,6 +99,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     async apiV1 => {
       // Health observability probes
       await apiV1.register(healthRoutes, { prefix: '/health' });
+
+      // Authentication & Session Endpoints (Stage 3)
+      if (!options.skipDatabasePlugin) {
+        await apiV1.register(authRoutes, { prefix: '/auth' });
+      }
     },
     { prefix: env.API_PREFIX }
   );
