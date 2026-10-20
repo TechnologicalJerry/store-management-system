@@ -2,6 +2,7 @@
 // Store Management System - Prisma Database Schema
 // ==============================================================================
 // Stage 2: Database & Persistence Layer Foundation
+// Stage 3: Authentication, Sessions & RBAC Authorization
 // Engine: PostgreSQL 17+
 // ==============================================================================
 
@@ -14,6 +15,46 @@ datasource db {
   url       = env("DATABASE_URL")
   directUrl = env("DATABASE_DIRECT_URL")
 }
+
+// ==============================================================================
+// Enums
+// ==============================================================================
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  STORE_MANAGER
+  INVENTORY_MANAGER
+  CASHIER
+}
+
+enum SessionStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+enum AuthAuditAction {
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGOUT
+  LOGOUT_ALL
+  TOKEN_REFRESH
+  TOKEN_REUSE_DETECTED
+  SESSION_REVOKED
+  ACCOUNT_SUSPENDED
+  REGISTER_SUCCESS
+}
+
+// ==============================================================================
+// Foundational System Settings (Stage 2)
+// ==============================================================================
 
 /// SystemSetting: Foundational key-value entity for global system parameters,
 /// feature toggles, and metadata.
@@ -28,4 +69,87 @@ model SystemSetting {
 
   @@index([key], name: "idx_system_settings_key")
   @@map("system_settings")
+}
+
+// ==============================================================================
+// Authentication & Authorization Models (Stage 3)
+// ==============================================================================
+
+/// User: Core identity account entity supporting credentials and lifecycle state.
+model User {
+  id              String      @id @default(uuid()) @db.Uuid
+  email           String      @unique @db.VarChar(255)
+  passwordHash    String      @map("password_hash") @db.VarChar(255)
+  name            String      @db.VarChar(100)
+  status          UserStatus  @default(ACTIVE)
+  emailVerifiedAt DateTime?   @map("email_verified_at") @db.Timestamptz(6)
+  lastLoginAt     DateTime?   @map("last_login_at") @db.Timestamptz(6)
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  roles           UserRole[]
+  sessions        Session[]
+  audits          AuthAudit[]
+
+  @@index([email], name: "idx_users_email")
+  @@index([status], name: "idx_users_status")
+  @@map("users")
+}
+
+/// UserRole: Explicit normalized mapping of users to system authorization roles.
+model UserRole {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  role      Role
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role], name: "uq_user_roles_user_role")
+  @@index([userId], name: "idx_user_roles_user_id")
+  @@index([role], name: "idx_user_roles_role")
+  @@map("user_roles")
+}
+
+/// Session: Persistent session tracking entity for refresh-token rotation and replay detection.
+model Session {
+  id               String        @id @default(uuid()) @db.Uuid
+  userId           String        @map("user_id") @db.Uuid
+  refreshTokenHash String        @unique @map("refresh_token_hash") @db.VarChar(255)
+  tokenFamily      String        @map("token_family") @db.Uuid
+  status           SessionStatus @default(ACTIVE)
+  ipAddress        String?       @map("ip_address") @db.VarChar(45)
+  userAgent        String?       @map("user_agent") @db.VarChar(500)
+  expiresAt        DateTime      @map("expires_at") @db.Timestamptz(6)
+  lastUsedAt       DateTime      @default(now()) @map("last_used_at") @db.Timestamptz(6)
+  revokedAt        DateTime?     @map("revoked_at") @db.Timestamptz(6)
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], name: "idx_sessions_user_id")
+  @@index([tokenFamily], name: "idx_sessions_token_family")
+  @@index([status], name: "idx_sessions_status")
+  @@index([expiresAt], name: "idx_sessions_expires_at")
+  @@map("sessions")
+}
+
+/// AuthAudit: Security and audit log of authentication and authorization events.
+model AuthAudit {
+  id        String          @id @default(uuid()) @db.Uuid
+  userId    String?         @map("user_id") @db.Uuid
+  email     String          @db.VarChar(255)
+  action    AuthAuditAction
+  ipAddress String?         @map("ip_address") @db.VarChar(45)
+  userAgent String?         @map("user_agent") @db.VarChar(500)
+  metadata  Json?           @db.JsonB
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user      User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId], name: "idx_auth_audits_user_id")
+  @@index([email], name: "idx_auth_audits_email")
+  @@index([action], name: "idx_auth_audits_action")
+  @@index([createdAt], name: "idx_auth_audits_created_at")
+  @@map("auth_audits")
 }
