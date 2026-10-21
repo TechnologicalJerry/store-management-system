@@ -12,16 +12,37 @@ export type Role =
  * System permissions for granular access control.
  */
 export type Permission =
-  // User Management
+  // User Administration
   | 'users:read'
   | 'users:manage'
+  | 'users:update'
+  | 'users:manage_status'
   | 'users:delete'
   // Store Management
   | 'stores:read'
+  | 'stores:create'
+  | 'stores:update'
   | 'stores:manage'
-  // Product Catalog
+  | 'stores:manage_status'
+  // Store Memberships
+  | 'store_members:read'
+  | 'store_members:create'
+  | 'store_members:update'
+  | 'store_members:remove'
+  // Product Categories
+  | 'categories:read'
+  | 'categories:create'
+  | 'categories:update'
+  | 'categories:manage_status'
+  | 'categories:delete'
+  // Product Catalog & Variants
   | 'products:read'
+  | 'products:create'
+  | 'products:update'
   | 'products:manage'
+  | 'products:manage_status'
+  | 'product_variants:manage'
+  | 'product_prices:manage'
   // Inventory Operations
   | 'inventory:read'
   | 'inventory:manage'
@@ -38,6 +59,7 @@ export type Permission =
   | 'reports:export'
   // Session Security
   | 'sessions:revoke_any';
+
 
 /**
  * User account lifecycle status.
