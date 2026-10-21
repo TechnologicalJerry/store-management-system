@@ -12,6 +12,11 @@ import { databasePlugin } from './infrastructure/database/database.plugin.js';
 import { checkDatabaseConnection } from './infrastructure/database/prisma-client.js';
 import { authenticationPlugin } from './plugins/authentication.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
+import { storeRoutes } from './modules/stores/store.routes.js';
+import { userRoutes, storeMemberRoutes } from './modules/users/user.routes.js';
+import { categoryRoutes } from './modules/categories/category.routes.js';
+import { productRoutes, variantRoutes } from './modules/products/product.routes.js';
+
 
 export interface BuildAppOptions {
   env?: Env;
@@ -100,9 +105,24 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       // Health observability probes
       await apiV1.register(healthRoutes, { prefix: '/health' });
 
-      // Authentication & Session Endpoints (Stage 3)
+      // API Routes (when database plugin is active)
       if (!options.skipDatabasePlugin) {
+        // Stage 3: Authentication & Session Endpoints
         await apiV1.register(authRoutes, { prefix: '/auth' });
+
+        // Stage 4: Store Management & Membership Endpoints
+        await apiV1.register(storeRoutes, { prefix: '/stores' });
+        await apiV1.register(storeMemberRoutes, { prefix: '/stores/:storeId/members' });
+
+        // Stage 4: User Administration Endpoints
+        await apiV1.register(userRoutes, { prefix: '/users' });
+
+        // Stage 4: Product Category Endpoints
+        await apiV1.register(categoryRoutes, { prefix: '/categories' });
+
+        // Stage 4: Product Catalog & Variant Endpoints
+        await apiV1.register(productRoutes, { prefix: '/products' });
+        await apiV1.register(variantRoutes, { prefix: '/variants' });
       }
     },
     { prefix: env.API_PREFIX }
