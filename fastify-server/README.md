@@ -1,16 +1,17 @@
 # Store Management System — Fastify Backend
 
-Scalable, high-performance, production-ready backend service for the **Store Management System**, built with Fastify, TypeScript, PostgreSQL, Prisma ORM, and modern Node.js architecture.
+Scalable, high-performance, production-ready backend service for the **Store Management System**, built with Fastify, TypeScript, PostgreSQL, Prisma ORM, and modern Node.js modular monolith architecture.
 
 ---
 
 ## 1. Project Overview
 
-The Store Management System backend is engineered to support enterprise-grade retail and multi-store operations, encompassing inventory management, supplier procurement, point-of-sale transactions, payment integrations, role-based access control, and analytical reporting.
+The Store Management System backend is engineered to support enterprise-grade retail and multi-store operations, encompassing multi-branch store operations, staff membership assignments, product catalog taxonomies, inventory control, supplier procurement, point-of-sale transactions, payment integrations, role-based access control, and analytical reporting.
 
 - **Stage 1 (Foundation):** Established Fastify application factory, Zod environment validation, structured Pino logging, HTTP security hardening, rate limiting, centralized error handling, health probes, and OpenAPI documentation.
 - **Stage 2 (Database & Persistence Layer):** Established PostgreSQL 17 relational persistence using Prisma ORM with `@prisma/adapter-pg` connection pooling, isolated repository boundaries, idempotent migration and seed infrastructure, and bounded database health readiness probes.
 - **Stage 3 (Authentication, Sessions & Authorization):** Established Argon2id credential hashing, short-lived JWT access tokens, refresh token rotation with SHA-256 storage and replay/theft detection, transactional FIFO session management (max 2 active sessions), dual-transport cookie/bearer security, and RBAC role-to-permission route guards.
+- **Stage 4 (Store Management, User Administration & Product Catalog):** Established retail store branches, store-scoped staff memberships, global user administration with final-administrator safeguards, hierarchical category taxonomies with cycle detection, product catalog management, sellable SKU variants, exact Decimal pricing, and multi-store access control.
 
 ---
 
@@ -23,6 +24,7 @@ The Store Management System backend is engineered to support enterprise-grade re
 - **Primary Database:** [PostgreSQL](https://www.postgresql.org/) `17`
 - **ORM & Data Layer:** [Prisma ORM](https://www.prisma.io/) `v6.4.0` with `@prisma/adapter-pg` driver adapter
 - **Connection Pool:** `pg` `v8.13.3` with pool bounds and connection timeouts
+- **Monetary Precision:** Prisma `Decimal` (`@db.Decimal(12, 2)`) preventing floating-point arithmetic errors
 - **Password Hashing:** [Argon2id](https://github.com/ranisalt/node-argon2) (`argon2` `v0.41.1`)
 - **Token Infrastructure:** [jsonwebtoken](https://github.com/auth0/node-jsonwebtoken) `v9.0.2` with HS256 signatures
 - **Cookie Security:** [`@fastify/cookie`](https://github.com/fastify/fastify-cookie) `v11.0.2` with cryptographic signing
@@ -44,13 +46,15 @@ The Store Management System backend is engineered to support enterprise-grade re
 ```text
 fastify-server/
 ├── prisma/
-│   ├── schema.prisma                  # Prisma database schema (SystemSetting, User, Session, Audit)
+│   ├── schema.prisma                  # Prisma database schema definition
 │   ├── seed.ts                        # Idempotent foundational database seed script
 │   └── migrations/
 │       ├── 20261019000000_init_foundation/
 │       │   └── migration.sql          # Initial PostgreSQL DDL migration
-│       └── 20261020000000_add_auth_models/
-│           └── migration.sql          # Stage 3 Authentication DDL migration
+│       ├── 20261020000000_add_auth_models/
+│       │   └── migration.sql          # Stage 3 Authentication DDL migration
+│       └── 20261021000000_add_store_and_catalog_models/
+│           └── migration.sql          # Stage 4 Store & Catalog DDL migration
 ├── src/
 │   ├── app.ts                         # Application factory & plugin composition
 │   ├── server.ts                      # Server bootstrap, signal handling & graceful shutdown
@@ -60,33 +64,50 @@ fastify-server/
 │   │   ├── security.ts                # Helmet, CORS, and Rate-limiting plugins
 │   │   ├── swagger.ts                 # OpenAPI 3.0 specification & Swagger UI
 │   │   ├── authentication.ts          # Fastify authentication plugin (fastify.authenticate)
-│   │   └── authorization.ts           # RBAC mappings and requireRoles / requirePermissions guards
+│   │   └── authorization.ts           # RBAC mappings and requireRoles / requireStoreAccess guards
 │   ├── common/
 │   │   ├── errors/
 │   │   │   ├── app-error.ts           # Reusable AppError hierarchy
 │   │   │   ├── error-handler.ts       # Centralized Fastify & Prisma error handlers
 │   │   │   └── index.ts               # Barrel export for error module
 │   │   ├── types/
+│   │   │   ├── pagination.ts          # Standard pagination metadata & result types
 │   │   │   └── index.ts               # Shared API response and health contracts
 │   │   └── utils/
 │   │       ├── logger.ts              # Pino logger configuration, request ID & redaction
+│   │       ├── pagination.ts          # Reusable pagination parsing and response construction
 │   │       └── index.ts               # Barrel export for utilities
 │   ├── modules/
-│   │   ├── health/
-│   │   │   ├── health.routes.ts       # /health/live and /health/ready endpoints
-│   │   │   ├── health.schema.ts       # OpenAPI validation & response schemas
-│   │   │   ├── health.service.ts      # Liveness and extensible readiness probes
-│   │   │   └── index.ts               # Barrel export for health module
-│   │   └── auth/
-│   │       ├── auth.types.ts          # Role, permission, DTO, and token types
-│   │       ├── auth.schemas.ts        # Fastify / OpenAPI route schemas
-│   │       ├── password.service.ts    # Argon2id password hashing and email normalization
-│   │       ├── token.service.ts       # JWT access tokens and SHA-256 refresh hashing
-│   │       ├── auth.repository.ts     # User, Role, Session, and Audit persistence
-│   │       ├── session.service.ts     # Session lifecycle, rotation, and replay detection
-│   │       ├── auth.service.ts        # Business logic for auth workflows
-│   │       ├── auth.routes.ts         # Fastify route endpoints under /api/v1/auth
-│   │       └── index.ts               # Barrel export for auth module
+│   │   ├── health/                    # Observability probes (/health/live, /health/ready)
+│   │   ├── auth/                      # Authentication & sessions (/api/v1/auth)
+│   │   ├── stores/                    # Store management (/api/v1/stores)
+│   │   │   ├── store.types.ts
+│   │   │   ├── store.schemas.ts
+│   │   │   ├── store.repository.ts
+│   │   │   ├── store.service.ts
+│   │   │   ├── store.routes.ts
+│   │   │   └── index.ts
+│   │   ├── users/                     # User admin & memberships (/api/v1/users, /stores/:id/members)
+│   │   │   ├── user.types.ts
+│   │   │   ├── user.schemas.ts
+│   │   │   ├── user.repository.ts
+│   │   │   ├── user.service.ts
+│   │   │   ├── user.routes.ts
+│   │   │   └── index.ts
+│   │   ├── categories/                # Product categories (/api/v1/categories)
+│   │   │   ├── category.types.ts
+│   │   │   ├── category.schemas.ts
+│   │   │   ├── category.repository.ts
+│   │   │   ├── category.service.ts
+│   │   │   ├── category.routes.ts
+│   │   │   └── index.ts
+│   │   └── products/                  # Product catalog & variants (/api/v1/products, /variants)
+│   │       ├── product.types.ts
+│   │       ├── product.schemas.ts
+│   │       ├── product.repository.ts
+│   │       ├── product.service.ts
+│   │       ├── product.routes.ts
+│   │       └── index.ts
 │   ├── infrastructure/
 │   │   ├── index.ts                   # Architectural boundary re-exports
 │   │   └── database/
@@ -95,45 +116,45 @@ fastify-server/
 │   │       ├── database.types.ts      # Database types, DTOs & repository contracts
 │   │       ├── database.errors.ts     # Prisma error mapping and credential sanitization
 │   │       ├── repositories/
-│   │       │   └── system-setting.repository.ts # Foundational setting repository
+│   │       │   └── system-setting.repository.ts
 │   │       └── index.ts               # Barrel export for database module
 │   └── types/
-│       ├── fastify.d.ts               # Fastify module augmentation (app.prisma, req.user, app.authenticate)
+│       ├── fastify.d.ts               # Fastify module augmentation
 │       └── index.ts                   # Global type re-exports
 ├── tests/
 │   ├── unit/
-│   │   ├── env.test.ts                # Environment & database schema validation tests
-│   │   ├── health.service.test.ts     # Health service probe and registration tests
-│   │   ├── app-error.test.ts          # Operational error class hierarchy tests
-│   │   ├── database.test.ts           # Database connection and ping timeout tests
-│   │   ├── database-errors.test.ts    # Prisma error sanitization and mapping tests
-│   │   ├── system-setting.repository.test.ts # Repository method and transaction tests
-│   │   ├── password.service.test.ts   # Argon2id hashing, length bounds & email normalization
-│   │   ├── token.service.test.ts      # JWT signing/verification & SHA-256 token hashing
-│   │   ├── authorization.test.ts      # RBAC permission deduction & route guard pre-handlers
-│   │   └── session.service.test.ts    # FIFO session limits, rotation & replay detection
+│   │   ├── env.test.ts
+│   │   ├── health.service.test.ts
+│   │   ├── app-error.test.ts
+│   │   ├── database.test.ts
+│   │   ├── database-errors.test.ts
+│   │   ├── system-setting.repository.test.ts
+│   │   ├── password.service.test.ts
+│   │   ├── token.service.test.ts
+│   │   ├── authorization.test.ts
+│   │   ├── session.service.test.ts
+│   │   ├── store.service.test.ts      # Store code normalization and duplicate checks
+│   │   ├── user.service.test.ts       # User admin, super admin safeguard, memberships
+│   │   ├── category.service.test.ts   # Category hierarchy, slug, and cycle detection
+│   │   ├── product.service.test.ts    # Decimal pricing, SKU normalization, variants
+│   │   └── store-authorization.test.ts # Multi-store access control guard
 │   └── integration/
-│       ├── app.test.ts                # App factory initialization tests
-│       ├── health.test.ts             # Live and Ready HTTP probe tests
-│       ├── security.test.ts           # Security headers, CORS allowlist, payload limits
-│       ├── error-handling.test.ts     # 404 routing, AppError & Prisma error formatting
-│       ├── database.plugin.test.ts    # Fastify database decoration & lifecycle tests
-│       ├── database-health.test.ts    # Database readiness probe integration tests
-│       └── auth.routes.test.ts        # Fastify injection tests for all /api/v1/auth endpoints
+│       ├── app.test.ts
+│       ├── health.test.ts
+│       ├── security.test.ts
+│       ├── error-handling.test.ts
+│       ├── database.plugin.test.ts
+│       ├── database-health.test.ts
+│       ├── auth.routes.test.ts
+│       ├── stores.routes.test.ts      # Store management endpoints
+│       ├── users.routes.test.ts       # User admin & store membership endpoints
+│       ├── categories.routes.test.ts  # Category hierarchy endpoints
+│       └── products.routes.test.ts    # Product and variant catalog endpoints
 ├── docs/
 │   ├── implementation-status.md       # Implementation tracker and verification log
 │   └── transaction-strategy.md        # Transaction boundaries, isolation & concurrency guide
 ├── .env.example                       # Documented environment variables template
-├── .gitignore                         # Version control exclusions
-├── .dockerignore                      # Docker context exclusions
-├── Dockerfile                         # Production-ready multi-stage container manifest
-├── docker-compose.yml                 # Local orchestrator with PostgreSQL 17
 ├── package.json                       # Project manifests and lifecycle scripts
-├── package-lock.json                  # Pinned deterministic dependency lockfile
-├── tsconfig.json                      # Strict TypeScript compiler options
-├── eslint.config.js                   # ESLint v9 flat configuration
-├── .prettierrc.json                   # Formatting style definitions
-├── vitest.config.ts                   # Test runner configuration
 └── README.md                          # Project documentation
 ```
 
@@ -147,8 +168,6 @@ Copy the template file to create your local `.env`:
 cp .env.example .env
 ```
 
-### Supported Configuration Variables
-
 | Variable | Type | Default | Description |
 |---|---|---|---|
 | `NODE_ENV` | `string` | `development` | Runtime environment (`development`, `test`, `production`) |
@@ -158,89 +177,89 @@ cp .env.example .env
 | `API_PREFIX` | `string` | `/api/v1` | URL prefix prepended to all versioned API routes |
 | `CORS_ORIGINS` | `string` | `http://localhost:3000,http://localhost:5173` | Comma-separated allowed origins (wildcard `*` prohibited in production) |
 | `SWAGGER_ENABLED` | `boolean` | `true` (dev) / `false` (prod) | Toggle Swagger UI interactive documentation |
-| `DATABASE_URL` | `string` | `postgresql://postgres:postgres@localhost:5432/store_management?schema=public` | PostgreSQL pooled connection URL |
-| `DATABASE_DIRECT_URL` | `string` | `undefined` | Optional direct connection URL for migrations |
-| `DB_POOL_MAX` | `number` | `10` | Maximum concurrent connections in the application client pool (1 - 100) |
+| `DATABASE_URL` | `string` | `postgresql://...` | PostgreSQL pooled connection URL |
+| `DB_POOL_MAX` | `number` | `10` | Maximum concurrent connections in the application client pool |
 | `DB_CONNECTION_TIMEOUT_MS` | `number` | `5000` | Timeout threshold for establishing database connections in ms |
-| `JWT_ACCESS_SECRET` | `string` | `dev-jwt-access-secret-...` | Secret key for signing HS256 JWT access tokens (min 32 chars) |
-| `JWT_ACCESS_TTL` | `string` | `15m` | Lifetime duration for access tokens (`15m`, `1h`, etc.) |
-| `JWT_ISSUER` | `string` | `store-management-system` | Expected token issuer (`iss` claim) |
-| `JWT_AUDIENCE` | `string` | `store-management-system-api` | Expected token audience (`aud` claim) |
-| `REFRESH_TOKEN_TTL_DAYS` | `number` | `7` | Refresh token validity window in days (1 - 90) |
-| `MAX_ACTIVE_SESSIONS` | `number` | `2` | Maximum concurrent active sessions per user account (1 - 10) |
+| `JWT_ACCESS_SECRET` | `string` | Development fallback | Secret key for signing HS256 JWT access tokens (min 32 chars) |
+| `JWT_ACCESS_TTL` | `string` | `15m` | Lifetime duration for access tokens |
+| `REFRESH_TOKEN_TTL_DAYS` | `number` | `7` | Refresh token validity window in days |
+| `MAX_ACTIVE_SESSIONS` | `number` | `2` | Maximum concurrent active sessions per user account |
 | `AUTH_COOKIE_NAME` | `string` | `refresh_token` | Name of the secure HttpOnly cookie for refresh tokens |
-| `COOKIE_SECRET` | `string` | `dev-cookie-secret-...` | Cryptographic secret for signing HTTP cookies (min 32 chars) |
-
-### Production Secret Management Expectations
-
-In production (`NODE_ENV=production`):
-1. Both `JWT_ACCESS_SECRET` and `COOKIE_SECRET` must be set to unique, cryptographically random values (minimum 32 characters, generated via `openssl rand -base64 32`). Development fallback strings are strictly rejected at application startup.
-2. Wildcard CORS origins (`*`) are disallowed. Explicit HTTPS domains must be supplied in `CORS_ORIGINS`.
-3. Database credentials and token secrets must never be committed to source control or logged in console/diagnostic outputs.
+| `COOKIE_SECRET` | `string` | Development fallback | Cryptographic secret for signing HTTP cookies (min 32 chars) |
 
 ---
 
-## 5. Local PostgreSQL Infrastructure
+## 5. Store Management, User Administration & Product Catalog (Stage 4)
 
-Local PostgreSQL is orchestrated via Docker Compose:
+### 5.1 Store & Branch Management
+- Retail locations are represented by the `Store` model with unique uppercase store codes (e.g. `STORE-001`), addresses, timezones, and lifecycle statuses (`ACTIVE`, `INACTIVE`, `SUSPENDED`).
+- Deletion uses soft-deletion (`deletedAt`) to ensure historical store data is never lost when referenced by future sales and stock records.
+- Endpoints:
+  - `POST /api/v1/stores`: Create store branch (`stores:create`).
+  - `GET /api/v1/stores`: List stores with pagination and status/search filtering (`stores:read`).
+  - `GET /api/v1/stores/:storeId`: Retrieve store details (`stores:read`).
+  - `PATCH /api/v1/stores/:storeId`: Update store metadata (`stores:update`).
+  - `PATCH /api/v1/stores/:storeId/status`: Transition store status (`stores:manage_status`).
 
-```bash
-# Start PostgreSQL 17 container in the background
-docker compose up -d postgres
+### 5.2 User Administration & Store Memberships
+- User profiles can be browsed and updated by authorized administrators without ever returning password hashes, refresh tokens, or session secrets.
+- **Final Administrator Safeguard:** The service prevents deactivating or suspending the last active `SUPER_ADMIN` user in the system.
+- Staff are bound to specific stores via `StoreMembership` records with store-scoped roles (`STORE_MANAGER`, `INVENTORY_MANAGER`, `CASHIER`) and membership statuses (`ACTIVE`, `INACTIVE`, `SUSPENDED`).
+- Endpoints:
+  - `GET /api/v1/users`: Paginated user list with role and status filtering (`users:read`).
+  - `GET /api/v1/users/:userId`: Single user details (`users:read`).
+  - `PATCH /api/v1/users/:userId`: Update profile name or email (`users:update`).
+  - `PATCH /api/v1/users/:userId/status`: Change account status (`users:manage_status`).
+  - `GET /api/v1/stores/:storeId/members`: List store staff (`store_members:read`).
+  - `POST /api/v1/stores/:storeId/members`: Assign staff member to store (`store_members:create`).
+  - `PATCH /api/v1/stores/:storeId/members/:membershipId`: Update role or status (`store_members:update`).
+  - `DELETE /api/v1/stores/:storeId/members/:membershipId`: Revoke membership (`store_members:remove`).
 
-# Check container health status
-docker compose ps
-```
+### 5.3 Product Category Hierarchy
+- Hierarchical product taxonomy with self-referential `parentId` relations.
+- Automatic URL-friendly slug generation with uniqueness enforcement.
+- **Integrity Safeguards:** Server-side validation prevents self-parenting and circular ancestor chains (e.g. A -> B -> C -> A). Deleting categories with assigned products or child categories is blocked.
+- Endpoints:
+  - `POST /api/v1/categories`: Create category (`categories:create`).
+  - `GET /api/v1/categories`: List categories with parent relations (`categories:read`).
+  - `GET /api/v1/categories/:categoryId`: Get category details (`categories:read`).
+  - `PATCH /api/v1/categories/:categoryId`: Update category details (`categories:update`).
+  - `PATCH /api/v1/categories/:categoryId/status`: Update status (`categories:manage_status`).
+  - `DELETE /api/v1/categories/:categoryId`: Delete clean category (`categories:delete`).
+
+### 5.4 Product Catalog & Variant Pricing
+- Products are linked to active categories and represent general items with brands and lifecycle statuses (`DRAFT`, `ACTIVE`, `ARCHIVED`).
+- Specific sellable units are modeled as `ProductVariant` items with uppercase unique SKUs, optional unique barcodes, and JSON attributes.
+- **Exact Decimal Pricing:** Monetary prices are persisted in PostgreSQL using `DECIMAL(12, 2)` via Prisma `Decimal`, ensuring precision without JavaScript floating-point errors. Formatted as lossless two-decimal strings (e.g. `"29.99"`) in API responses.
+- Supports creating products with an initial default variant in an atomic transaction (`prisma.$transaction`).
+- Endpoints:
+  - `POST /api/v1/products`: Create product and optional initial variant (`products:create`).
+  - `GET /api/v1/products`: Paginated product catalog with category/brand/search filters (`products:read`).
+  - `GET /api/v1/products/:productId`: Product details with variants (`products:read`).
+  - `PATCH /api/v1/products/:productId`: Update product details (`products:update`).
+  - `PATCH /api/v1/products/:productId/status`: Update product status (`products:manage_status`).
+  - `POST /api/v1/products/:productId/variants`: Add variant to product (`product_variants:manage`).
+  - `GET /api/v1/products/:productId/variants`: List variants of a product (`products:read`).
+  - `GET /api/v1/variants/:variantId`: Get variant details (`products:read`).
+  - `PATCH /api/v1/variants/:variantId`: Update variant SKU, barcode, or price (`product_variants:manage`).
+  - `PATCH /api/v1/variants/:variantId/status`: Update variant status (`product_variants:manage`).
+
+### 5.5 Multi-Store Access Control
+- Access control integrates global roles with store-scoped memberships using `requireStoreAccess(permission)`:
+  - Global `SUPER_ADMIN` and `ADMIN` roles possess universal cross-store authority.
+  - Store-level staff (`STORE_MANAGER`, `INVENTORY_MANAGER`, `CASHIER`) must hold an `ACTIVE` membership in the specified store with an assigned role that grants the requested permission.
+  - Operations targeting inactive or suspended stores are rejected.
 
 ---
 
-## 6. Authentication, Sessions & RBAC Architecture
-
-### Account Provisioning & Registration Policy
-- `POST /api/v1/auth/register`: Public self-registration provisions accounts with the safe default role `CASHIER`.
-- Public clients cannot assign privileged roles (`ADMIN`, `SUPER_ADMIN`, `STORE_MANAGER`, `INVENTORY_MANAGER`). Privileged role assignment is restricted to authenticated administrative workflows.
-- User accounts default to status `ACTIVE` with email normalization applied consistently before storage.
-- Password hashes are computed using Argon2id with memory cost `64MB`, time cost `3 iterations`, and parallelism `4 threads`. Plaintext passwords and hashes are never returned in API payloads.
-
-### Access Tokens & Refresh Token Rotation
-- **Access Tokens:** Signed using `HS256` with a short 15-minute validity window. Contains minimal claims: `sub` (User ID), `email`, `name`, `roles`, and `sessionId`.
-- **Refresh Tokens:** Issued as high-entropy 64-character hex strings generated via `crypto.randomBytes(32)`.
-- **Hashed Persistence:** The server never stores plaintext refresh tokens in PostgreSQL. Only the SHA-256 hash is persisted in the `sessions` table.
-- **Rotation:** Every successful call to `POST /api/v1/auth/refresh` generates a new refresh token and atomically replaces the stored hash in the database within a transaction.
-- **Replay / Theft Detection:** If an already-rotated or revoked refresh token is presented, the system detects a potential token theft, immediately revokes all active sessions in that token's `tokenFamily`, and logs a security audit event (`REFRESH_REUSE_DETECTED`).
-
-### Active Session Management & FIFO Eviction Policy
-- Each user account is allowed a maximum of **2 active concurrent sessions** by default (`MAX_ACTIVE_SESSIONS=2`).
-- When a user logs in and the active session count reaches the threshold, the system transactionally evicts the oldest active session (First-In, First-Out) by marking it `REVOKED`. This ensures legitimate users are not locked out while strictly bounding resource usage and exposure window.
-
-### Dual-Transport & CSRF Defense
-- **Browser Clients:** Refresh tokens are transported via signed `HttpOnly`, `SameSite=Strict`, `Path=/api/v1/auth` cookies. For cookie-based refresh requests, origin validation is enforced against `CORS_ORIGINS` to protect against cross-site request forgery.
-- **API / Mobile Clients:** Refresh tokens can alternatively be provided in the JSON body (`{ "refreshToken": "..." }`) and access tokens in the `Authorization: Bearer <token>` header.
-
-### Supported Roles & Central Permissions Mapping
-
-| Role | Operational Scope | Default Permissions |
-|---|---|---|
-| `SUPER_ADMIN` | Global system control | `users:manage`, `stores:manage`, `products:manage`, `inventory:manage`, `procurement:manage`, `sales:manage`, `reports:read`, `audit:read` |
-| `ADMIN` | Operations administration | `users:manage`, `stores:read`, `products:manage`, `inventory:manage`, `procurement:manage`, `sales:manage`, `reports:read` |
-| `STORE_MANAGER` | Store-level operations | `stores:read`, `products:read`, `inventory:manage`, `procurement:create`, `procurement:read`, `sales:manage`, `reports:read` |
-| `INVENTORY_MANAGER`| Warehouse & inventory control| `products:read`, `inventory:read`, `inventory:adjust`, `procurement:create`, `procurement:read` |
-| `CASHIER` | Point-of-sale checkout | `products:read`, `inventory:read`, `sales:create`, `sales:read` |
-
-Route access is enforced via `requireRoles(['ADMIN', ...])` or `requirePermissions(['users:manage', ...])`. By default, any route lacking explicit grant is denied.
-
----
-
-## 7. Authentication API Endpoints
-
-All authentication endpoints are versioned under the configured `API_PREFIX` (default `/api/v1/auth`):
+## 6. Authentication API Endpoints (Stage 3)
 
 | Method | Endpoint | Auth Required | Description |
 |---|---|---|---|
-| `POST` | `/api/v1/auth/register` | No | Creates new account with default `CASHIER` role. Rate-limited (10 req/min). |
-| `POST` | `/api/v1/auth/login` | No | Authenticates credentials, creates session with FIFO eviction, sets refresh cookie. Rate-limited (10 req/min). |
-| `POST` | `/api/v1/auth/refresh` | No (Cookie/Body) | Rotates refresh token and issues new access token. Replay attacks revoke family. |
-| `POST` | `/api/v1/auth/logout` | No (Cookie/Header) | Revokes active session and clears refresh token cookie. |
+| `POST` | `/api/v1/auth/register` | No | Creates new account with default `CASHIER` role. Rate-limited. |
+| `POST` | `/api/v1/auth/login` | No | Authenticates credentials, creates session with FIFO eviction, sets refresh cookie. |
+| `POST` | `/api/v1/auth/refresh` | Cookie / Body | Rotates refresh token and issues new access token. Replay attacks revoke family. |
+| `POST` | `/api/v1/auth/logout` | Cookie / Header | Revokes active session and clears refresh token cookie. |
 | `POST` | `/api/v1/auth/logout-all` | Bearer Token | Revokes all active sessions for authenticated caller across all devices. |
 | `GET` | `/api/v1/auth/me` | Bearer Token | Returns sanitized authenticated user profile and evaluated RBAC permissions. |
 | `GET` | `/api/v1/auth/sessions` | Bearer Token | Lists active and recent sessions for authenticated user without exposing secrets. |
@@ -248,63 +267,24 @@ All authentication endpoints are versioned under the configured `API_PREFIX` (de
 
 ---
 
-## 8. Health and Readiness Observability
+## 7. Health and Readiness Observability
 
-### `GET /api/v1/health/live`
-- **Purpose:** Process liveness probe for Kubernetes and Docker container restarts.
-- **Behavior:** Returns `200 OK` if the Fastify event loop is active. Independent of database status.
-
-### `GET /api/v1/health/ready`
-- **Purpose:** Application traffic readiness probe. Verifies whether critical subsystems (Core System, PostgreSQL) are operational.
-- **Database Probe:** Runs a bounded `SELECT 1` ping with a 3,000ms timeout threshold. Returns `200 OK` when ready, or `503 Service Unavailable` if database connectivity is unavailable.
+- `GET /api/v1/health/live`: Fast process liveness probe.
+- `GET /api/v1/health/ready`: Traffic readiness probe with bounded 3,000ms PostgreSQL ping (`SELECT 1`). Returns `200 OK` or `503 Service Unavailable`.
 
 ---
 
-## 9. Error Handling Architecture
-
-- **Prisma Error Interception:**
-  - `P2002` (Unique constraint breach) -> `409 Conflict` (`UNIQUE_CONSTRAINT_VIOLATION`)
-  - `P2025` (Record not found) -> `404 Not Found` (`NOT_FOUND`)
-  - `P2003` (Foreign key breach) -> `400 Bad Request` (`FOREIGN_KEY_VIOLATION`)
-  - `P2024`, `P1001` (Pool timeout / unreachable) -> `503 Service Unavailable` (`SERVICE_UNAVAILABLE`)
-- **Sanitization:** Table names, connection strings, SQL statements, and hostnames are never exposed in HTTP error responses.
-- **Structured Response Format:**
-  ```json
-  {
-    "statusCode": 409,
-    "error": "Conflict",
-    "code": "UNIQUE_CONSTRAINT_VIOLATION",
-    "message": "A resource with the specified unique key already exists.",
-    "details": { "field": "email" },
-    "requestId": "2b6b55cf-520e-4e31-8ca0-6420bdfb9a5c",
-    "timestamp": "2026-10-20T22:30:00.000Z"
-  }
-  ```
-
----
-
-## 10. Transaction and Concurrency Strategy
-
-See [docs/transaction-strategy.md](file:///d:/GitHub/store-management-system/fastify-server/docs/transaction-strategy.md) for complete guidelines covering:
-- Interactive vs batch transactions.
-- Domain service transaction orchestration with repository dependency injection.
-- PostgreSQL isolation levels (`ReadCommitted`, `RepeatableRead`, `Serializable`).
-- Atomic field operations (`increment`, `decrement`).
-- Deadlock prevention and safe retry policies.
-
----
-
-## 11. Backend Development Roadmap
+## 8. Backend Development Roadmap
 
 | Stage | Focus Area | Status |
 |---|---|---|
 | **Stage 1** | **Project Foundation (Fastify, TypeScript, Logging, Security, Health, Docs)** | **Implemented (Pending Verification)** |
 | **Stage 2** | **Database & Persistence Layer (PostgreSQL 17, Prisma ORM, Pooling, Health)** | **Implemented (Pending Verification)** |
 | **Stage 3** | **Authentication, Sessions & Authorization (Argon2id, JWT, Rotation, RBAC)** | **Implemented (Pending Verification)** |
-| Stage 4 | Caching Layer & Background Job Processing (Redis, BullMQ) | Remaining |
-| Stage 5 | Multi-Store Architecture & Role-Based Access Control (RBAC) | Remaining |
-| Stage 6 | Product Catalog, Categories & Barcode Management | Remaining |
-| Stage 7 | Inventory Control, Stock Transfers & Audit Tracking | Remaining |
-| Stage 8 | Supplier Management, Procurement & Purchase Orders | Remaining |
-| Stage 9 | Point of Sale (POS), Sales Orders, Checkout & Payments | Remaining |
-| Stage 10 | Analytics, Financial Reporting, Audit Logs & Production Hardening | Remaining |
+| **Stage 4** | **Store Management, User Administration & Product Catalog** | **Implemented (Pending Verification)** |
+| Stage 5 | Inventory Management | Remaining |
+| Stage 6 | Suppliers and Procurement | Remaining |
+| Stage 7 | Sales and Payment Workflows | Remaining |
+| Stage 8 | Reporting, Redis Caching and Background Jobs | Remaining |
+| Stage 9 | Testing, Security and Observability | Remaining |
+| Stage 10 | Production Readiness and Deployment | Remaining |
