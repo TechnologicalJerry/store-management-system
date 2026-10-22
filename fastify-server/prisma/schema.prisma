@@ -90,8 +90,14 @@ model User {
   roles               UserRole[]
   sessions            Session[]
   audits              AuthAudit[]
-  memberships         StoreMembership[] @relation("UserStoreMemberships")
-  createdMemberships  StoreMembership[] @relation("CreatedStoreMemberships")
+  memberships         StoreMembership[]   @relation("UserStoreMemberships")
+  createdMemberships  StoreMembership[]   @relation("CreatedStoreMemberships")
+  inventoryMovements  InventoryMovement[]
+  createdReservations StockReservation[]
+  createdTransfers    InventoryTransfer[] @relation("TransferCreatedByUser")
+  approvedTransfers   InventoryTransfer[] @relation("TransferApprovedByUser")
+  shippedTransfers    InventoryTransfer[] @relation("TransferShippedByUser")
+  receivedTransfers   InventoryTransfer[] @relation("TransferReceivedByUser")
 
   @@index([email], name: "idx_users_email")
   @@index([status], name: "idx_users_status")
@@ -192,7 +198,12 @@ model Store {
   updatedAt    DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt    DateTime?         @map("deleted_at") @db.Timestamptz(6)
 
-  members      StoreMembership[]
+  members                StoreMembership[]
+  inventoryBalances      InventoryBalance[]
+  inventoryMovements     InventoryMovement[]
+  stockReservations      StockReservation[]
+  transfersAsSource      InventoryTransfer[] @relation("TransferSourceStore")
+  transfersAsDestination InventoryTransfer[] @relation("TransferDestinationStore")
 
   @@index([code], name: "idx_stores_code")
   @@index([status], name: "idx_stores_status")
@@ -302,7 +313,11 @@ model ProductVariant {
   createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  product     Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product            Product                 @relation(fields: [productId], references: [id], onDelete: Cascade)
+  inventoryBalances  InventoryBalance[]
+  inventoryMovements InventoryMovement[]
+  stockReservations  StockReservation[]
+  transferItems      InventoryTransferItem[]
 
   @@index([productId], name: "idx_product_variants_product_id")
   @@index([sku], name: "idx_product_variants_sku")
@@ -310,4 +325,169 @@ model ProductVariant {
   @@index([status], name: "idx_product_variants_status")
   @@map("product_variants")
 }
+
+// ==============================================================================
+// Inventory Management Models (Stage 5)
+// ==============================================================================
+
+enum MovementType {
+  OPENING_STOCK
+  STOCK_RECEIVED
+  ADJUSTMENT_INCREASE
+  ADJUSTMENT_DECREASE
+  SALE
+  RETURN
+  TRANSFER_OUT
+  TRANSFER_IN
+  RESERVATION_CREATED
+  RESERVATION_RELEASED
+  RESERVATION_FULFILLED
+}
+
+enum ReservationStatus {
+  ACTIVE
+  RELEASED
+  FULFILLED
+  EXPIRED
+  CANCELLED
+}
+
+enum TransferStatus {
+  DRAFT
+  REQUESTED
+  APPROVED
+  SHIPPED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+/// InventoryBalance: Current stock quantities of a product variant at a specific store.
+model InventoryBalance {
+  id               String         @id @default(uuid()) @db.Uuid
+  storeId          String         @map("store_id") @db.Uuid
+  variantId        String         @map("variant_id") @db.Uuid
+  quantityOnHand   Decimal        @default(0) @map("quantity_on_hand") @db.Decimal(12, 4)
+  quantityReserved Decimal        @default(0) @map("quantity_reserved") @db.Decimal(12, 4)
+  reorderLevel     Decimal        @default(0) @map("reorder_level") @db.Decimal(12, 4)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  store            Store          @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  variant          ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@unique([storeId, variantId], name: "uq_inventory_balances_store_variant")
+  @@index([storeId], name: "idx_inventory_balances_store_id")
+  @@index([variantId], name: "idx_inventory_balances_variant_id")
+  @@map("inventory_balances")
+}
+
+/// InventoryMovement: Append-only immutable audit ledger recording every inventory modification.
+model InventoryMovement {
+  id                String          @id @default(uuid()) @db.Uuid
+  storeId           String          @map("store_id") @db.Uuid
+  variantId         String          @map("variant_id") @db.Uuid
+  movementType      MovementType    @map("movement_type")
+  quantityDelta     Decimal         @map("quantity_delta") @db.Decimal(12, 4)
+  quantityBefore    Decimal         @map("quantity_before") @db.Decimal(12, 4)
+  quantityAfter     Decimal         @map("quantity_after") @db.Decimal(12, 4)
+  referenceType     String?         @map("reference_type") @db.VarChar(50)
+  referenceId       String?         @map("reference_id") @db.VarChar(100)
+  idempotencyKey    String?         @map("idempotency_key") @db.VarChar(100)
+  reason            String?         @db.VarChar(255)
+  notes             String?         @db.Text
+  performedByUserId String?         @map("performed_by_user_id") @db.Uuid
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  store             Store           @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  variant           ProductVariant  @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  performedByUser   User?           @relation(fields: [performedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, variantId], name: "idx_inventory_movements_store_variant")
+  @@index([movementType], name: "idx_inventory_movements_type")
+  @@index([referenceType, referenceId], name: "idx_inventory_movements_reference")
+  @@index([idempotencyKey], name: "idx_inventory_movements_idempotency")
+  @@index([createdAt], name: "idx_inventory_movements_created_at")
+  @@map("inventory_movements")
+}
+
+/// StockReservation: Stock held for upcoming sales or checkout operations.
+model StockReservation {
+  id              String            @id @default(uuid()) @db.Uuid
+  storeId         String            @map("store_id") @db.Uuid
+  variantId       String            @map("variant_id") @db.Uuid
+  quantity        Decimal           @db.Decimal(12, 4)
+  status          ReservationStatus @default(ACTIVE)
+  referenceType   String?           @map("reference_type") @db.VarChar(50)
+  referenceId     String?           @map("reference_id") @db.VarChar(100)
+  expiresAt       DateTime?         @map("expires_at") @db.Timestamptz(6)
+  createdByUserId String?           @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  store           Store             @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  variant         ProductVariant    @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  createdByUser   User?             @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, variantId], name: "idx_reservations_store_variant")
+  @@index([status], name: "idx_reservations_status")
+  @@index([referenceType, referenceId], name: "idx_reservations_reference")
+  @@index([expiresAt], name: "idx_reservations_expires_at")
+  @@map("stock_reservations")
+}
+
+/// InventoryTransfer: Inter-store stock transfer request and movement tracking.
+model InventoryTransfer {
+  id                  String                @id @default(uuid()) @db.Uuid
+  transferNumber      String                @unique @map("transfer_number") @db.VarChar(50)
+  sourceStoreId       String                @map("source_store_id") @db.Uuid
+  destinationStoreId  String                @map("destination_store_id") @db.Uuid
+  status              TransferStatus        @default(DRAFT)
+  notes               String?               @db.Text
+  createdByUserId     String?               @map("created_by_user_id") @db.Uuid
+  approvedByUserId    String?               @map("approved_by_user_id") @db.Uuid
+  shippedByUserId     String?               @map("shipped_by_user_id") @db.Uuid
+  receivedByUserId    String?               @map("received_by_user_id") @db.Uuid
+  shippedAt           DateTime?             @map("shipped_at") @db.Timestamptz(6)
+  receivedAt          DateTime?             @map("received_at") @db.Timestamptz(6)
+  cancelledAt         DateTime?             @map("cancelled_at") @db.Timestamptz(6)
+  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  sourceStore         Store                 @relation("TransferSourceStore", fields: [sourceStoreId], references: [id], onDelete: Restrict)
+  destinationStore    Store                 @relation("TransferDestinationStore", fields: [destinationStoreId], references: [id], onDelete: Restrict)
+  createdByUser       User?                 @relation("TransferCreatedByUser", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  approvedByUser      User?                 @relation("TransferApprovedByUser", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  shippedByUser       User?                 @relation("TransferShippedByUser", fields: [shippedByUserId], references: [id], onDelete: SetNull)
+  receivedByUser      User?                 @relation("TransferReceivedByUser", fields: [receivedByUserId], references: [id], onDelete: SetNull)
+  items               InventoryTransferItem[]
+
+  @@index([transferNumber], name: "idx_transfers_transfer_number")
+  @@index([sourceStoreId], name: "idx_transfers_source_store_id")
+  @@index([destinationStoreId], name: "idx_transfers_dest_store_id")
+  @@index([status], name: "idx_transfers_status")
+  @@map("inventory_transfers")
+}
+
+/// InventoryTransferItem: Specific SKU variant and requested/shipped/received quantities for a transfer.
+model InventoryTransferItem {
+  id                 String            @id @default(uuid()) @db.Uuid
+  transferId         String            @map("transfer_id") @db.Uuid
+  variantId          String            @map("variant_id") @db.Uuid
+  quantityRequested  Decimal           @map("quantity_requested") @db.Decimal(12, 4)
+  quantityShipped    Decimal           @default(0) @map("quantity_shipped") @db.Decimal(12, 4)
+  quantityReceived   Decimal           @default(0) @map("quantity_received") @db.Decimal(12, 4)
+  notes              String?           @db.VarChar(255)
+  createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  transfer           InventoryTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  variant            ProductVariant    @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@unique([transferId, variantId], name: "uq_transfer_items_transfer_variant")
+  @@index([transferId], name: "idx_transfer_items_transfer_id")
+  @@index([variantId], name: "idx_transfer_items_variant_id")
+  @@map("inventory_transfer_items")
+}
+
 
