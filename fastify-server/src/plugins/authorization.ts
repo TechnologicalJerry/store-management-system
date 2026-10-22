@@ -35,7 +35,16 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'product_prices:manage',
     'inventory:read',
     'inventory:manage',
+    'inventory:receive',
     'inventory:adjust',
+    'inventory:read_movements',
+    'inventory:manage_reservations',
+    'inventory_transfers:read',
+    'inventory_transfers:create',
+    'inventory_transfers:approve',
+    'inventory_transfers:ship',
+    'inventory_transfers:receive',
+    'inventory_transfers:cancel',
     'procurement:read',
     'procurement:manage',
     'sales:read',
@@ -74,7 +83,16 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'product_prices:manage',
     'inventory:read',
     'inventory:manage',
+    'inventory:receive',
     'inventory:adjust',
+    'inventory:read_movements',
+    'inventory:manage_reservations',
+    'inventory_transfers:read',
+    'inventory_transfers:create',
+    'inventory_transfers:approve',
+    'inventory_transfers:ship',
+    'inventory_transfers:receive',
+    'inventory_transfers:cancel',
     'procurement:read',
     'procurement:manage',
     'sales:read',
@@ -95,7 +113,16 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'product_variants:manage',
     'inventory:read',
     'inventory:manage',
+    'inventory:receive',
     'inventory:adjust',
+    'inventory:read_movements',
+    'inventory:manage_reservations',
+    'inventory_transfers:read',
+    'inventory_transfers:create',
+    'inventory_transfers:approve',
+    'inventory_transfers:ship',
+    'inventory_transfers:receive',
+    'inventory_transfers:cancel',
     'procurement:read',
     'procurement:manage',
     'sales:read',
@@ -113,7 +140,14 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'product_variants:manage',
     'inventory:read',
     'inventory:manage',
+    'inventory:receive',
     'inventory:adjust',
+    'inventory:read_movements',
+    'inventory:manage_reservations',
+    'inventory_transfers:read',
+    'inventory_transfers:create',
+    'inventory_transfers:ship',
+    'inventory_transfers:receive',
     'procurement:read',
     'procurement:manage',
     'reports:read',
@@ -265,4 +299,65 @@ export function requireStoreAccess(
     }
   };
 }
+
+/**
+ * Pre-handler hook enforcing access to one or both stores involved in a stock transfer.
+ * Global admins have full access across all stores.
+ */
+export function requireTransferStoreAccess(
+  permission: Permission,
+  storeResolver: (request: FastifyRequest) => { sourceStoreId?: string; destinationStoreId?: string; targetStoreId?: string }
+): preHandlerHookHandler {
+  return async (request: FastifyRequest, _reply: FastifyReply) => {
+    if (!request.user) {
+      throw new UnauthorizedError('Authentication required to access this resource.');
+    }
+
+    const isGlobalAdmin = request.user.roles.includes('SUPER_ADMIN') || request.user.roles.includes('ADMIN');
+    if (isGlobalAdmin) {
+      if (request.user.permissions.includes(permission)) {
+        return;
+      }
+      throw new ForbiddenError(`Access denied: Missing required permission '${permission}'.`);
+    }
+
+    const stores = storeResolver(request);
+    const storeIdToCheck = stores.targetStoreId || stores.sourceStoreId || stores.destinationStoreId;
+    if (!storeIdToCheck) {
+      throw new ForbiddenError('Store identifier could not be resolved for this transfer operation.');
+    }
+
+    const membership = await request.server.prisma.storeMembership.findFirst({
+      where: {
+        userId: request.user.id,
+        storeId: storeIdToCheck,
+      },
+      include: {
+        store: {
+          select: {
+            id: true,
+            status: true,
+            deletedAt: true,
+          },
+        },
+      },
+    });
+
+    if (!membership || membership.status !== 'ACTIVE') {
+      throw new ForbiddenError('Access denied: You do not have an active membership for the store involved in this transfer.');
+    }
+
+    if (membership.store.status !== 'ACTIVE' || membership.store.deletedAt !== null) {
+      throw new ForbiddenError('Access denied: Store involved in this transfer is inactive, suspended, or deleted.');
+    }
+
+    const memberPermissions = ROLE_PERMISSIONS[membership.role] || [];
+    if (!memberPermissions.includes(permission)) {
+      throw new ForbiddenError(
+        `Access denied: Your store role '${membership.role}' does not grant permission '${permission}'.`
+      );
+    }
+  };
+}
+
 
