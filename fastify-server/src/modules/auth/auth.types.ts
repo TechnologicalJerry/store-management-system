@@ -46,7 +46,17 @@ export type Permission =
   // Inventory Operations
   | 'inventory:read'
   | 'inventory:manage'
+  | 'inventory:receive'
   | 'inventory:adjust'
+  | 'inventory:read_movements'
+  | 'inventory:manage_reservations'
+  // Inter-Store Inventory Transfers
+  | 'inventory_transfers:read'
+  | 'inventory_transfers:create'
+  | 'inventory_transfers:approve'
+  | 'inventory_transfers:ship'
+  | 'inventory_transfers:receive'
+  | 'inventory_transfers:cancel'
   // Procurement & Suppliers
   | 'procurement:read'
   | 'procurement:manage'
