@@ -12,6 +12,7 @@ The Store Management System backend is engineered to support enterprise-grade re
 - **Stage 2 (Database & Persistence Layer):** Established PostgreSQL 17 relational persistence using Prisma ORM with `@prisma/adapter-pg` connection pooling, isolated repository boundaries, idempotent migration and seed infrastructure, and bounded database health readiness probes.
 - **Stage 3 (Authentication, Sessions & Authorization):** Established Argon2id credential hashing, short-lived JWT access tokens, refresh token rotation with SHA-256 storage and replay/theft detection, transactional FIFO session management (max 2 active sessions), dual-transport cookie/bearer security, and RBAC role-to-permission route guards.
 - **Stage 4 (Store Management, User Administration & Product Catalog):** Established retail store branches, store-scoped staff memberships, global user administration with final-administrator safeguards, hierarchical category taxonomies with cycle detection, product catalog management, sellable SKU variants, exact Decimal pricing, and multi-store access control.
+- **Stage 5 (Inventory Management):** Established store-specific inventory balances with exact decimal quantities (`DECIMAL(12, 4)`), immutable append-only movement ledger, row-level concurrency locking (`SELECT ... FOR UPDATE`), idempotent stock receiving and manual adjustments, stock reservations with availability derivations, and inter-store stock transfers with multi-step lifecycle tracking.
 
 ---
 
@@ -53,8 +54,10 @@ fastify-server/
 │       │   └── migration.sql          # Initial PostgreSQL DDL migration
 │       ├── 20261020000000_add_auth_models/
 │       │   └── migration.sql          # Stage 3 Authentication DDL migration
-│       └── 20261021000000_add_store_and_catalog_models/
-│           └── migration.sql          # Stage 4 Store & Catalog DDL migration
+│       ├── 20261021000000_add_store_and_catalog_models/
+│       │   └── migration.sql          # Stage 4 Store & Catalog DDL migration
+│       └── 20261022000000_add_inventory_models/
+│           └── migration.sql          # Stage 5 Inventory & Transfers DDL migration
 ├── src/
 │   ├── app.ts                         # Application factory & plugin composition
 │   ├── server.ts                      # Server bootstrap, signal handling & graceful shutdown
@@ -101,12 +104,23 @@ fastify-server/
 │   │   │   ├── category.service.ts
 │   │   │   ├── category.routes.ts
 │   │   │   └── index.ts
-│   │   └── products/                  # Product catalog & variants (/api/v1/products, /variants)
-│   │       ├── product.types.ts
-│   │       ├── product.schemas.ts
-│   │       ├── product.repository.ts
-│   │       ├── product.service.ts
-│   │       ├── product.routes.ts
+│   │   ├── products/                  # Product catalog & variants (/api/v1/products, /variants)
+│   │   │   ├── product.types.ts
+│   │   │   ├── product.schemas.ts
+│   │   │   ├── product.repository.ts
+│   │   │   ├── product.service.ts
+│   │   │   ├── product.routes.ts
+│   │   │   └── index.ts
+│   │   └── inventory/                 # Inventory, movements & transfers (/stores/:id/inventory, /transfers)
+│   │       ├── inventory.types.ts
+│   │       ├── inventory.errors.ts
+│   │       ├── inventory.schemas.ts
+│   │       ├── inventory.repository.ts
+│   │       ├── inventory.service.ts
+│   │       ├── inventory-reservation.service.ts
+│   │       ├── inventory-transfer.service.ts
+│   │       ├── inventory.routes.ts
+│   │       ├── inventory-transfer.routes.ts
 │   │       └── index.ts
 │   ├── infrastructure/
 │   │   ├── index.ts                   # Architectural boundary re-exports
@@ -252,7 +266,33 @@ cp .env.example .env
 
 ---
 
-## 6. Authentication API Endpoints (Stage 3)
+## 6. Inventory & Inter-Store Transfers (Stage 5)
+
+### 6.1 Store Inventory Operations (`/api/v1/stores/:storeId/inventory`)
+- `GET /api/v1/stores/:storeId/inventory`: Paginated list of inventory balances with search and category filtering (`inventory:read`).
+- `GET /api/v1/stores/:storeId/inventory/low-stock`: Filtered list of variants where `quantityOnHand <= reorderLevel` (`inventory:read`).
+- `GET /api/v1/stores/:storeId/inventory/:variantId`: Single variant balance with derived `quantityAvailable` (`inventory:read`).
+- `GET /api/v1/stores/:storeId/inventory/:variantId/movements`: Audit movement history for a specific variant (`inventory:read_movements`).
+- `GET /api/v1/stores/:storeId/inventory/movements`: Comprehensive store movement ledger with date/type filtering (`inventory:read_movements`).
+- `POST /api/v1/stores/:storeId/inventory/receipts`: Idempotent stock receiving with atomic row lock (`inventory:receive`).
+- `POST /api/v1/stores/:storeId/inventory/adjustments`: Manual increase/decrease with mandatory reason and invariant checks (`inventory:adjust`).
+- `POST /api/v1/stores/:storeId/inventory/reservations`: Hold stock for order/checkout without reducing on-hand (`inventory:manage_reservations`).
+- `PATCH /api/v1/stores/:storeId/inventory/reservations/:id/release`: Release active reservation back to available stock (`inventory:manage_reservations`).
+- `PATCH /api/v1/stores/:storeId/inventory/reservations/:id/fulfill`: Fulfill reservation into completed sale, decrementing on-hand and reserved simultaneously (`inventory:manage_reservations`).
+
+### 6.2 Inter-Store Inventory Transfers (`/api/v1/inventory-transfers`)
+- `POST /api/v1/inventory-transfers`: Create inter-store transfer request in `DRAFT` status (`inventory_transfers:create`).
+- `GET /api/v1/inventory-transfers`: List transfers with source, destination, and status filters (`inventory_transfers:read`).
+- `GET /api/v1/inventory-transfers/:transferId`: Get transfer details including item lines and lifecycle timestamps (`inventory_transfers:read`).
+- `PATCH /api/v1/inventory-transfers/:transferId/submit`: Transition `DRAFT` -> `REQUESTED` (`inventory_transfers:create`).
+- `PATCH /api/v1/inventory-transfers/:transferId/approve`: Transition `REQUESTED` -> `APPROVED` (`inventory_transfers:approve`).
+- `PATCH /api/v1/inventory-transfers/:transferId/ship`: Atomically lock source items, deduct stock, and record `TRANSFER_OUT` (`inventory_transfers:ship`).
+- `PATCH /api/v1/inventory-transfers/:transferId/receive`: Atomically lock destination items, credit stock, and mark `RECEIVED` or `PARTIALLY_RECEIVED` (`inventory_transfers:receive`).
+- `PATCH /api/v1/inventory-transfers/:transferId/cancel`: Cancel unshipped transfer (`inventory_transfers:cancel`).
+
+---
+
+## 7. Authentication API Endpoints (Stage 3)
 
 | Method | Endpoint | Auth Required | Description |
 |---|---|---|---|
@@ -267,14 +307,14 @@ cp .env.example .env
 
 ---
 
-## 7. Health and Readiness Observability
+## 8. Health and Readiness Observability
 
 - `GET /api/v1/health/live`: Fast process liveness probe.
 - `GET /api/v1/health/ready`: Traffic readiness probe with bounded 3,000ms PostgreSQL ping (`SELECT 1`). Returns `200 OK` or `503 Service Unavailable`.
 
 ---
 
-## 8. Backend Development Roadmap
+## 9. Backend Development Roadmap
 
 | Stage | Focus Area | Status |
 |---|---|---|
@@ -282,9 +322,10 @@ cp .env.example .env
 | **Stage 2** | **Database & Persistence Layer (PostgreSQL 17, Prisma ORM, Pooling, Health)** | **Implemented (Pending Verification)** |
 | **Stage 3** | **Authentication, Sessions & Authorization (Argon2id, JWT, Rotation, RBAC)** | **Implemented (Pending Verification)** |
 | **Stage 4** | **Store Management, User Administration & Product Catalog** | **Implemented (Pending Verification)** |
-| Stage 5 | Inventory Management | Remaining |
+| **Stage 5** | **Inventory Management (Balances, Ledger, Concurrency, Transfers)** | **Implemented (Pending Verification)** |
 | Stage 6 | Suppliers and Procurement | Remaining |
 | Stage 7 | Sales and Payment Workflows | Remaining |
 | Stage 8 | Reporting, Redis Caching and Background Jobs | Remaining |
 | Stage 9 | Testing, Security and Observability | Remaining |
 | Stage 10 | Production Readiness and Deployment | Remaining |
+
