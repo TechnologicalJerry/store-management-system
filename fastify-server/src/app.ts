@@ -17,6 +17,8 @@ import { userRoutes, storeMemberRoutes } from './modules/users/user.routes.js';
 import { categoryRoutes } from './modules/categories/category.routes.js';
 import { productRoutes, variantRoutes } from './modules/products/product.routes.js';
 import { inventoryRoutes, inventoryTransferRoutes } from './modules/inventory/index.js';
+import { supplierRoutes } from './modules/suppliers/index.js';
+import { procurementRoutes, goodsReceiptRoutes } from './modules/procurement/index.js';
 
 
 export interface BuildAppOptions {
@@ -128,6 +130,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         // Stage 5: Inventory & Inter-Store Transfer Endpoints
         await apiV1.register(inventoryRoutes, { prefix: '/stores/:storeId/inventory' });
         await apiV1.register(inventoryTransferRoutes, { prefix: '/inventory-transfers' });
+
+        // Stage 6: Suppliers & Procurement Endpoints
+        await apiV1.register(supplierRoutes, { prefix: '/suppliers' });
+        await apiV1.register(procurementRoutes, { prefix: '/purchase-orders' });
+        await apiV1.register(goodsReceiptRoutes, { prefix: '/goods-receipts' });
       }
     },
     { prefix: env.API_PREFIX }
