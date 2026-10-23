@@ -98,6 +98,10 @@ model User {
   approvedTransfers   InventoryTransfer[] @relation("TransferApprovedByUser")
   shippedTransfers    InventoryTransfer[] @relation("TransferShippedByUser")
   receivedTransfers   InventoryTransfer[] @relation("TransferReceivedByUser")
+  createdPurchaseOrders  PurchaseOrder[]  @relation("PurchaseOrderCreatedByUser")
+  approvedPurchaseOrders PurchaseOrder[]  @relation("PurchaseOrderApprovedByUser")
+  receivedGoodsReceipts  GoodsReceipt[]   @relation("GoodsReceiptReceivedByUser")
+  poStatusChanges        PurchaseOrderStatusHistory[] @relation("POStatusChangedByUser")
 
   @@index([email], name: "idx_users_email")
   @@index([status], name: "idx_users_status")
@@ -204,6 +208,8 @@ model Store {
   stockReservations      StockReservation[]
   transfersAsSource      InventoryTransfer[] @relation("TransferSourceStore")
   transfersAsDestination InventoryTransfer[] @relation("TransferDestinationStore")
+  destinationPurchaseOrders PurchaseOrder[] @relation("PurchaseOrderDestinationStore")
+  destinationGoodsReceipts  GoodsReceipt[]  @relation("GoodsReceiptDestinationStore")
 
   @@index([code], name: "idx_stores_code")
   @@index([status], name: "idx_stores_status")
@@ -318,6 +324,9 @@ model ProductVariant {
   inventoryMovements InventoryMovement[]
   stockReservations  StockReservation[]
   transferItems      InventoryTransferItem[]
+  supplierProducts   SupplierProduct[]
+  purchaseOrderItems PurchaseOrderItem[]
+  goodsReceiptItems  GoodsReceiptItem[]
 
   @@index([productId], name: "idx_product_variants_product_id")
   @@index([sku], name: "idx_product_variants_sku")
@@ -489,5 +498,228 @@ model InventoryTransferItem {
   @@index([variantId], name: "idx_transfer_items_variant_id")
   @@map("inventory_transfer_items")
 }
+
+// ==============================================================================
+// Supplier Management & Procurement Models (Stage 6)
+// ==============================================================================
+
+enum SupplierStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum SupplierProductStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  ORDERED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum GoodsReceiptStatus {
+  COMPLETED
+  CANCELLED
+}
+
+/// Supplier: External vendor supplying goods and product variants.
+model Supplier {
+  id            String         @id @default(uuid()) @db.Uuid
+  name          String         @db.VarChar(150)
+  code          String         @unique @db.VarChar(50)
+  email         String?        @db.VarChar(255)
+  phone         String?        @db.VarChar(50)
+  website       String?        @db.VarChar(255)
+  taxIdentifier String?        @map("tax_identifier") @db.VarChar(50)
+  addressLine1  String?        @map("address_line_1") @db.VarChar(255)
+  addressLine2  String?        @map("address_line_2") @db.VarChar(255)
+  city          String?        @db.VarChar(100)
+  state         String?        @db.VarChar(100)
+  postalCode    String?        @map("postal_code") @db.VarChar(30)
+  countryCode   String?        @map("country_code") @db.VarChar(10)
+  status        SupplierStatus @default(ACTIVE)
+  notes         String?        @db.Text
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt     DateTime?      @map("deleted_at") @db.Timestamptz(6)
+
+  products       SupplierProduct[]
+  purchaseOrders PurchaseOrder[]
+
+  @@index([code], name: "idx_suppliers_code")
+  @@index([status], name: "idx_suppliers_status")
+  @@index([name], name: "idx_suppliers_name")
+  @@map("suppliers")
+}
+
+/// SupplierProduct: Association binding suppliers to product variants with pricing and lead times.
+model SupplierProduct {
+  id                   String                @id @default(uuid()) @db.Uuid
+  supplierId           String                @map("supplier_id") @db.Uuid
+  variantId            String                @map("variant_id") @db.Uuid
+  supplierSku          String?               @map("supplier_sku") @db.VarChar(100)
+  supplierProductName  String?               @map("supplier_product_name") @db.VarChar(200)
+  purchasePrice        Decimal               @map("purchase_price") @db.Decimal(12, 2)
+  currencyCode         String                @default("USD") @map("currency_code") @db.VarChar(3)
+  minimumOrderQuantity Decimal               @default(1) @map("minimum_order_quantity") @db.Decimal(12, 4)
+  leadTimeDays         Int?                  @map("lead_time_days")
+  isPreferred          Boolean               @default(false) @map("is_preferred")
+  status               SupplierProductStatus @default(ACTIVE)
+  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  supplier             Supplier              @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  variant              ProductVariant        @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  purchaseOrderItems   PurchaseOrderItem[]
+
+  @@unique([supplierId, variantId], name: "uq_supplier_products_supplier_variant")
+  @@index([supplierId], name: "idx_supplier_products_supplier_id")
+  @@index([variantId], name: "idx_supplier_products_variant_id")
+  @@index([status], name: "idx_supplier_products_status")
+  @@map("supplier_products")
+}
+
+/// PurchaseOrder: Formal procurement order sent to a supplier for delivery to a destination store.
+model PurchaseOrder {
+  id                  String                @id @default(uuid()) @db.Uuid
+  purchaseOrderNumber String                @unique @map("purchase_order_number") @db.VarChar(50)
+  supplierId          String                @map("supplier_id") @db.Uuid
+  destinationStoreId  String                @map("destination_store_id") @db.Uuid
+  status              PurchaseOrderStatus   @default(DRAFT)
+  currencyCode        String                @default("USD") @map("currency_code") @db.VarChar(3)
+  subtotal            Decimal               @default(0) @db.Decimal(12, 2)
+  discountTotal       Decimal               @default(0) @map("discount_total") @db.Decimal(12, 2)
+  taxTotal            Decimal               @default(0) @map("tax_total") @db.Decimal(12, 2)
+  shippingTotal       Decimal               @default(0) @map("shipping_total") @db.Decimal(12, 2)
+  grandTotal          Decimal               @default(0) @map("grand_total") @db.Decimal(12, 2)
+  notes               String?               @db.Text
+  createdByUserId     String?               @map("created_by_user_id") @db.Uuid
+  approvedByUserId    String?               @map("approved_by_user_id") @db.Uuid
+  approvedAt          DateTime?             @map("approved_at") @db.Timestamptz(6)
+  orderedAt           DateTime?             @map("ordered_at") @db.Timestamptz(6)
+  expectedDeliveryAt  DateTime?             @map("expected_delivery_at") @db.Timestamptz(6)
+  cancelledAt         DateTime?             @map("cancelled_at") @db.Timestamptz(6)
+  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  supplier            Supplier              @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  destinationStore    Store                 @relation("PurchaseOrderDestinationStore", fields: [destinationStoreId], references: [id], onDelete: Restrict)
+  createdByUser       User?                 @relation("PurchaseOrderCreatedByUser", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  approvedByUser      User?                 @relation("PurchaseOrderApprovedByUser", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  items               PurchaseOrderItem[]
+  goodsReceipts       GoodsReceipt[]
+  statusHistory       PurchaseOrderStatusHistory[]
+
+  @@index([purchaseOrderNumber], name: "idx_purchase_orders_number")
+  @@index([supplierId], name: "idx_purchase_orders_supplier_id")
+  @@index([destinationStoreId], name: "idx_purchase_orders_destination_store_id")
+  @@index([status], name: "idx_purchase_orders_status")
+  @@index([createdAt], name: "idx_purchase_orders_created_at")
+  @@map("purchase_orders")
+}
+
+/// PurchaseOrderItem: Line item within a purchase order specifying ordered and received quantities and agreed pricing.
+model PurchaseOrderItem {
+  id                  String           @id @default(uuid()) @db.Uuid
+  purchaseOrderId     String           @map("purchase_order_id") @db.Uuid
+  variantId           String           @map("variant_id") @db.Uuid
+  supplierProductId   String?          @map("supplier_product_id") @db.Uuid
+  skuSnapshot         String           @map("sku_snapshot") @db.VarChar(100)
+  productNameSnapshot String           @map("product_name_snapshot") @db.VarChar(200)
+  supplierSkuSnapshot String?          @map("supplier_sku_snapshot") @db.VarChar(100)
+  quantityOrdered     Decimal          @map("quantity_ordered") @db.Decimal(12, 4)
+  quantityReceived    Decimal          @default(0) @map("quantity_received") @db.Decimal(12, 4)
+  unitPrice           Decimal          @map("unit_price") @db.Decimal(12, 2)
+  discountAmount      Decimal          @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  taxRate             Decimal          @default(0) @map("tax_rate") @db.Decimal(5, 4)
+  lineTotal           Decimal          @map("line_total") @db.Decimal(12, 2)
+  createdAt           DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  purchaseOrder       PurchaseOrder    @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  variant             ProductVariant   @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  supplierProduct     SupplierProduct? @relation(fields: [supplierProductId], references: [id], onDelete: SetNull)
+  goodsReceiptItems   GoodsReceiptItem[]
+
+  @@index([purchaseOrderId], name: "idx_purchase_order_items_po_id")
+  @@index([variantId], name: "idx_purchase_order_items_variant_id")
+  @@map("purchase_order_items")
+}
+
+/// GoodsReceipt: Record of physical shipment delivery against a purchase order.
+model GoodsReceipt {
+  id                 String             @id @default(uuid()) @db.Uuid
+  receiptNumber      String             @unique @map("receipt_number") @db.VarChar(50)
+  purchaseOrderId    String             @map("purchase_order_id") @db.Uuid
+  destinationStoreId String             @map("destination_store_id") @db.Uuid
+  status             GoodsReceiptStatus @default(COMPLETED)
+  receivedByUserId   String?            @map("received_by_user_id") @db.Uuid
+  receivedAt         DateTime           @default(now()) @map("received_at") @db.Timestamptz(6)
+  deliveryReference  String?            @map("delivery_reference") @db.VarChar(100)
+  notes              String?            @db.Text
+  idempotencyKey     String?            @unique @map("idempotency_key") @db.VarChar(100)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  purchaseOrder      PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  destinationStore   Store              @relation("GoodsReceiptDestinationStore", fields: [destinationStoreId], references: [id], onDelete: Restrict)
+  receivedByUser     User?              @relation("GoodsReceiptReceivedByUser", fields: [receivedByUserId], references: [id], onDelete: SetNull)
+  items              GoodsReceiptItem[]
+
+  @@index([receiptNumber], name: "idx_goods_receipts_number")
+  @@index([purchaseOrderId], name: "idx_goods_receipts_po_id")
+  @@index([destinationStoreId], name: "idx_goods_receipts_store_id")
+  @@index([idempotencyKey], name: "idx_goods_receipts_idempotency")
+  @@index([receivedAt], name: "idx_goods_receipts_received_at")
+  @@map("goods_receipts")
+}
+
+/// GoodsReceiptItem: Specific delivery line item with accepted and rejected quantities and reasons.
+model GoodsReceiptItem {
+  id                  String            @id @default(uuid()) @db.Uuid
+  goodsReceiptId      String            @map("goods_receipt_id") @db.Uuid
+  purchaseOrderItemId String            @map("purchase_order_item_id") @db.Uuid
+  variantId           String            @map("variant_id") @db.Uuid
+  quantityDelivered   Decimal           @map("quantity_delivered") @db.Decimal(12, 4)
+  quantityAccepted    Decimal           @map("quantity_accepted") @db.Decimal(12, 4)
+  quantityRejected    Decimal           @default(0) @map("quantity_rejected") @db.Decimal(12, 4)
+  rejectionReason     String?           @map("rejection_reason") @db.VarChar(255)
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  goodsReceipt        GoodsReceipt      @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  purchaseOrderItem   PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Restrict)
+  variant             ProductVariant    @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([goodsReceiptId], name: "idx_goods_receipt_items_receipt_id")
+  @@index([purchaseOrderItemId], name: "idx_goods_receipt_items_po_item_id")
+  @@index([variantId], name: "idx_goods_receipt_items_variant_id")
+  @@map("goods_receipt_items")
+}
+
+/// PurchaseOrderStatusHistory: Immutable audit log of purchase order lifecycle transitions.
+model PurchaseOrderStatusHistory {
+  id              String              @id @default(uuid()) @db.Uuid
+  purchaseOrderId String              @map("purchase_order_id") @db.Uuid
+  fromStatus      PurchaseOrderStatus @map("from_status")
+  toStatus        PurchaseOrderStatus @map("to_status")
+  changedByUserId String?             @map("changed_by_user_id") @db.Uuid
+  reason          String?             @db.VarChar(255)
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  purchaseOrder   PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  changedByUser   User?               @relation("POStatusChangedByUser", fields: [changedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([purchaseOrderId], name: "idx_po_status_history_po_id")
+  @@index([createdAt], name: "idx_po_status_history_created_at")
+  @@map("purchase_order_status_history")
+}
+
 
 
