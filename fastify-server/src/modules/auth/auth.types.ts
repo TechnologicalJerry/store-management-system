@@ -60,6 +60,17 @@ export type Permission =
   // Procurement & Suppliers
   | 'procurement:read'
   | 'procurement:manage'
+  | 'suppliers:read'
+  | 'suppliers:create'
+  | 'suppliers:update'
+  | 'suppliers:delete'
+  | 'purchase_orders:read'
+  | 'purchase_orders:create'
+  | 'purchase_orders:update'
+  | 'purchase_orders:approve'
+  | 'purchase_orders:cancel'
+  | 'goods_receipts:read'
+  | 'goods_receipts:create'
   // Sales & Point-of-Sale
   | 'sales:read'
   | 'sales:create'
