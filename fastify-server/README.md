@@ -56,8 +56,10 @@ fastify-server/
 │       │   └── migration.sql          # Stage 3 Authentication DDL migration
 │       ├── 20261021000000_add_store_and_catalog_models/
 │       │   └── migration.sql          # Stage 4 Store & Catalog DDL migration
-│       └── 20261022000000_add_inventory_models/
-│           └── migration.sql          # Stage 5 Inventory & Transfers DDL migration
+│       ├── 20261022000000_add_inventory_models/
+│       │   └── migration.sql          # Stage 5 Inventory & Transfers DDL migration
+│       └── 20261023000000_add_procurement_models/
+│           └── migration.sql          # Stage 6 Suppliers & Procurement DDL migration
 ├── src/
 │   ├── app.ts                         # Application factory & plugin composition
 │   ├── server.ts                      # Server bootstrap, signal handling & graceful shutdown
@@ -111,16 +113,35 @@ fastify-server/
 │   │   │   ├── product.service.ts
 │   │   │   ├── product.routes.ts
 │   │   │   └── index.ts
-│   │   └── inventory/                 # Inventory, movements & transfers (/stores/:id/inventory, /transfers)
-│   │       ├── inventory.types.ts
-│   │       ├── inventory.errors.ts
-│   │       ├── inventory.schemas.ts
-│   │       ├── inventory.repository.ts
-│   │       ├── inventory.service.ts
-│   │       ├── inventory-reservation.service.ts
-│   │       ├── inventory-transfer.service.ts
-│   │       ├── inventory.routes.ts
-│   │       ├── inventory-transfer.routes.ts
+│   │   ├── inventory/                 # Inventory, movements & transfers (/stores/:id/inventory, /transfers)
+│   │   │   ├── inventory.types.ts
+│   │   │   ├── inventory.errors.ts
+│   │   │   ├── inventory.schemas.ts
+│   │   │   ├── inventory.repository.ts
+│   │   │   ├── inventory.service.ts
+│   │   │   ├── inventory-reservation.service.ts
+│   │   │   ├── inventory-transfer.service.ts
+│   │   │   ├── inventory.routes.ts
+│   │   │   ├── inventory-transfer.routes.ts
+│   │   │   └── index.ts
+│   │   ├── suppliers/                 # Supplier directory & vendor catalogue (/api/v1/suppliers)
+│   │   │   ├── supplier.constants.ts
+│   │   │   ├── supplier.types.ts
+│   │   │   ├── supplier.errors.ts
+│   │   │   ├── supplier.schemas.ts
+│   │   │   ├── supplier.repository.ts
+│   │   │   ├── supplier.service.ts
+│   │   │   ├── supplier.routes.ts
+│   │   │   └── index.ts
+│   │   └── procurement/               # Purchase orders & goods receipts (/api/v1/purchase-orders)
+│   │       ├── procurement.constants.ts
+│   │       ├── procurement.types.ts
+│   │       ├── procurement.errors.ts
+│   │       ├── procurement.schemas.ts
+│   │       ├── procurement.repository.ts
+│   │       ├── purchase-order.service.ts
+│   │       ├── goods-receipt.service.ts
+│   │       ├── procurement.routes.ts
 │   │       └── index.ts
 │   ├── infrastructure/
 │   │   ├── index.ts                   # Architectural boundary re-exports
@@ -292,7 +313,38 @@ cp .env.example .env
 
 ---
 
-## 7. Authentication API Endpoints (Stage 3)
+## 7. Suppliers & Procurement (Stage 6)
+
+### 7.1 Suppliers Management & Product Offerings (`/api/v1/suppliers`)
+- `POST /api/v1/suppliers`: Register vendor with unique code and tax identifier (`suppliers:create`).
+- `GET /api/v1/suppliers`: Paginated supplier directory with status and name/code search (`suppliers:read`).
+- `GET /api/v1/suppliers/:supplierId`: Single supplier profile and product statistics (`suppliers:read`).
+- `PATCH /api/v1/suppliers/:supplierId`: Update contact and address information (`suppliers:update`).
+- `PATCH /api/v1/suppliers/:supplierId/status`: Transition operational status (`ACTIVE`, `INACTIVE`, `SUSPENDED`) (`suppliers:update`).
+- `DELETE /api/v1/suppliers/:supplierId`: Soft delete supplier with safeguard preventing deletion if orders exist (`suppliers:delete`).
+- `GET /api/v1/suppliers/:supplierId/products`: Paginated catalog of products supplied by vendor (`suppliers:read`).
+- `POST /api/v1/suppliers/:supplierId/products`: Link product variant with agreed price, MOQ, and lead time (`suppliers:update`).
+- `PATCH /api/v1/suppliers/:supplierId/products/:supplierProductId`: Update pricing or order constraints (`suppliers:update`).
+- `DELETE /api/v1/suppliers/:supplierId/products/:supplierProductId`: Unlink variant from supplier catalogue (`suppliers:delete`).
+
+### 7.2 Purchase Order Lifecycle (`/api/v1/purchase-orders`)
+- `POST /api/v1/purchase-orders`: Create new requisition in `DRAFT` status with exact decimal calculations (`purchase_orders:create`).
+- `GET /api/v1/purchase-orders`: List purchase orders filtered by supplier, store, status, and dates (`purchase_orders:read`).
+- `GET /api/v1/purchase-orders/:purchaseOrderId`: Get order details, line snapshots, status history, and receipt count (`purchase_orders:read`).
+- `PATCH /api/v1/purchase-orders/:purchaseOrderId`: Modify draft line items, pricing, or shipping (`purchase_orders:update`).
+- `POST /api/v1/purchase-orders/:purchaseOrderId/submit`: Transition `DRAFT` -> `PENDING_APPROVAL` (`purchase_orders:update`).
+- `POST /api/v1/purchase-orders/:purchaseOrderId/approve`: Transition to `APPROVED`. Enforces separation of duties (creator cannot approve unless SUPER_ADMIN) (`purchase_orders:approve`).
+- `POST /api/v1/purchase-orders/:purchaseOrderId/order`: Transition `APPROVED` -> `ORDERED` and set vendor transmission timestamp (`purchase_orders:update`).
+- `POST /api/v1/purchase-orders/:purchaseOrderId/cancel`: Cancel order if zero deliveries have been accepted (`purchase_orders:cancel`).
+
+### 7.3 Goods Receiving & Inventory Integration (`/api/v1/purchase-orders/:id/receipts`, `/api/v1/goods-receipts`)
+- `POST /api/v1/purchase-orders/:purchaseOrderId/receipts`: Record physical delivery against `ORDERED` or `PARTIALLY_RECEIVED` order. Distinguishes accepted vs rejected quantities, increments destination store `quantityOnHand` via row lock `FOR UPDATE`, and logs `STOCK_RECEIVED` movements (`goods_receipts:create`).
+- `GET /api/v1/purchase-orders/:purchaseOrderId/receipts`: List delivery receipts for a specific purchase order (`goods_receipts:read`).
+- `GET /api/v1/goods-receipts/:goodsReceiptId`: Retrieve detailed goods receipt with line items and rejection reasons (`goods_receipts:read`).
+
+---
+
+## 8. Authentication API Endpoints (Stage 3)
 
 | Method | Endpoint | Auth Required | Description |
 |---|---|---|---|
@@ -307,14 +359,14 @@ cp .env.example .env
 
 ---
 
-## 8. Health and Readiness Observability
+## 9. Health and Readiness Observability
 
 - `GET /api/v1/health/live`: Fast process liveness probe.
 - `GET /api/v1/health/ready`: Traffic readiness probe with bounded 3,000ms PostgreSQL ping (`SELECT 1`). Returns `200 OK` or `503 Service Unavailable`.
 
 ---
 
-## 9. Backend Development Roadmap
+## 10. Backend Development Roadmap
 
 | Stage | Focus Area | Status |
 |---|---|---|
@@ -323,9 +375,10 @@ cp .env.example .env
 | **Stage 3** | **Authentication, Sessions & Authorization (Argon2id, JWT, Rotation, RBAC)** | **Implemented (Pending Verification)** |
 | **Stage 4** | **Store Management, User Administration & Product Catalog** | **Implemented (Pending Verification)** |
 | **Stage 5** | **Inventory Management (Balances, Ledger, Concurrency, Transfers)** | **Implemented (Pending Verification)** |
-| Stage 6 | Suppliers and Procurement | Remaining |
+| **Stage 6** | **Suppliers and Procurement (Catalog, Orders, Receiving, Concurrency)** | **Implemented (Pending Verification)** |
 | Stage 7 | Sales and Payment Workflows | Remaining |
 | Stage 8 | Reporting, Redis Caching and Background Jobs | Remaining |
 | Stage 9 | Testing, Security and Observability | Remaining |
 | Stage 10 | Production Readiness and Deployment | Remaining |
+
 
