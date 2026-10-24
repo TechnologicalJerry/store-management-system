@@ -19,6 +19,8 @@ import { productRoutes, variantRoutes } from './modules/products/product.routes.
 import { inventoryRoutes, inventoryTransferRoutes } from './modules/inventory/index.js';
 import { supplierRoutes } from './modules/suppliers/index.js';
 import { procurementRoutes, goodsReceiptRoutes } from './modules/procurement/index.js';
+import { saleRoutes, receiptRoutes } from './modules/sales/index.js';
+import { paymentRoutes } from './modules/payments/index.js';
 
 
 export interface BuildAppOptions {
@@ -135,6 +137,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         await apiV1.register(supplierRoutes, { prefix: '/suppliers' });
         await apiV1.register(procurementRoutes, { prefix: '/purchase-orders' });
         await apiV1.register(goodsReceiptRoutes, { prefix: '/goods-receipts' });
+
+        // Stage 7: Sales, Payments & Receipts Endpoints
+        await apiV1.register(saleRoutes, { prefix: '/sales' });
+        await apiV1.register(paymentRoutes, { prefix: '/payments' });
+        await apiV1.register(receiptRoutes, { prefix: '/receipts' });
       }
     },
     { prefix: env.API_PREFIX }
