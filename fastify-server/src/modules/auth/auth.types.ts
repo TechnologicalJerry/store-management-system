@@ -74,7 +74,18 @@ export type Permission =
   // Sales & Point-of-Sale
   | 'sales:read'
   | 'sales:create'
+  | 'sales:checkout'
+  | 'sales:cancel'
   | 'sales:refund'
+  // Payments & Financial Transactions
+  | 'payments:read'
+  | 'payments:record_cash'
+  | 'payments:initiate'
+  | 'payments:capture'
+  | 'payments:void'
+  | 'payments:refund'
+  // Receipts
+  | 'receipts:read'
   // Reporting & Analytics
   | 'reports:read'
   | 'reports:export'
