@@ -160,6 +160,68 @@ export const envSchema = z
       .string()
       .min(32, 'COOKIE_SECRET must be at least 32 characters long for cryptographic security')
       .default(DEV_COOKIE_SECRET),
+
+    // =========================================================================
+    // Stage 8: Redis Caching, Queues & Background Worker Configuration
+    // =========================================================================
+    REDIS_URL: z
+      .string()
+      .regex(/^rediss?:\/\/.+/, 'REDIS_URL must be a valid Redis URL (redis:// or rediss://)')
+      .default('redis://localhost:6379'),
+    REDIS_HOST: z.string().min(1).default('localhost'),
+    REDIS_PORT: z
+      .preprocess(
+        val => (typeof val === 'string' ? parseInt(val, 10) : val),
+        z
+          .number({ invalid_type_error: 'REDIS_PORT must be a number' })
+          .int()
+          .min(1)
+          .max(65535)
+      )
+      .default(6379),
+    REDIS_PASSWORD: z.string().optional(),
+    REDIS_TLS_ENABLED: z.preprocess(val => (val !== undefined ? val : false), booleanFromEnv(false)),
+    REDIS_CONNECT_TIMEOUT_MS: z
+      .preprocess(
+        val => (typeof val === 'string' ? parseInt(val, 10) : val),
+        z
+          .number({ invalid_type_error: 'REDIS_CONNECT_TIMEOUT_MS must be a number' })
+          .int()
+          .min(500)
+          .max(60000)
+      )
+      .default(5000),
+    REDIS_MAX_RETRIES_PER_REQUEST: z
+      .preprocess(
+        val => (typeof val === 'string' ? parseInt(val, 10) : val),
+        z.number().int().min(0).max(20)
+      )
+      .default(3),
+    CACHE_DEFAULT_TTL_SECONDS: z
+      .preprocess(
+        val => (typeof val === 'string' ? parseInt(val, 10) : val),
+        z.number().int().min(1).max(86400)
+      )
+      .default(300),
+    CACHE_CATALOG_TTL_SECONDS: z
+      .preprocess(
+        val => (typeof val === 'string' ? parseInt(val, 10) : val),
+        z.number().int().min(1).max(86400)
+      )
+      .default(600),
+    CACHE_STORE_TTL_SECONDS: z
+      .preprocess(
+        val => (typeof val === 'string' ? parseInt(val, 10) : val),
+        z.number().int().min(1).max(86400)
+      )
+      .default(1800),
+    WORKER_CONCURRENCY: z
+      .preprocess(
+        val => (typeof val === 'string' ? parseInt(val, 10) : val),
+        z.number().int().min(1).max(50)
+      )
+      .default(5),
+    WORKER_ENABLED: z.preprocess(val => (val !== undefined ? val : false), booleanFromEnv(false)),
   })
   .superRefine((data, ctx) => {
     // In production, enforce that CORS_ORIGINS does not include a wildcard '*'
