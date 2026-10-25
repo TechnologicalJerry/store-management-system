@@ -104,6 +104,7 @@ model User {
   poStatusChanges        PurchaseOrderStatusHistory[] @relation("POStatusChangedByUser")
   cashierSales           Sale[]           @relation("SaleCashierUser")
   requestedRefunds       Refund[]         @relation("RefundRequestedByUser")
+  reportRequests         ReportRequest[]  @relation("UserReportRequests")
 
   @@index([email], name: "idx_users_email")
   @@index([status], name: "idx_users_status")
@@ -214,6 +215,7 @@ model Store {
   destinationGoodsReceipts  GoodsReceipt[]  @relation("GoodsReceiptDestinationStore")
   sales                  Sale[]           @relation("SaleStore")
   receipts               Receipt[]        @relation("ReceiptStore")
+  reportRequests         ReportRequest[]  @relation("StoreReportRequests")
 
   @@index([code], name: "idx_stores_code")
   @@index([status], name: "idx_stores_status")
@@ -906,6 +908,77 @@ model Receipt {
   @@index([storeId], name: "idx_receipts_store_id")
   @@index([issuedAt], name: "idx_receipts_issued_at")
   @@map("receipts")
+}
+
+// ==============================================================================
+// Reporting, Analytics & Background Job Models (Stage 8)
+// ==============================================================================
+
+enum ReportType {
+  SALES_SUMMARY
+  TOP_PRODUCTS
+  PAYMENT_SUMMARY
+  INVENTORY_SUMMARY
+  LOW_STOCK
+  PROCUREMENT_SUMMARY
+}
+
+enum ReportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+/// ReportRequest: Persistent tracking record for asynchronous and large date-range reports.
+model ReportRequest {
+  id                String       @id @default(uuid()) @db.Uuid
+  reportNumber      String       @unique @map("report_number") @db.VarChar(50)
+  reportType        ReportType   @map("report_type")
+  status            ReportStatus @default(PENDING)
+  storeId           String       @map("store_id") @db.Uuid
+  requestedByUserId String       @map("requested_by_user_id") @db.Uuid
+  parameters        Json         @db.JsonB
+  resultData        Json?        @map("result_data") @db.JsonB
+  errorMessage      String?      @map("error_message") @db.VarChar(500)
+  expiresAt         DateTime?    @map("expires_at") @db.Timestamptz(6)
+  completedAt       DateTime?    @map("completed_at") @db.Timestamptz(6)
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  store             Store        @relation("StoreReportRequests", fields: [storeId], references: [id], onDelete: Restrict)
+  requestedByUser   User         @relation("UserReportRequests", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([reportNumber], name: "idx_report_requests_number")
+  @@index([storeId], name: "idx_report_requests_store_id")
+  @@index([status], name: "idx_report_requests_status")
+  @@index([reportType], name: "idx_report_requests_type")
+  @@index([createdAt], name: "idx_report_requests_created_at")
+  @@map("report_requests")
+}
+
+/// OutboxEvent: Minimal transactional outbox for durable asynchronous event and job dispatch.
+model OutboxEvent {
+  id            String       @id @default(uuid()) @db.Uuid
+  eventType     String       @map("event_type") @db.VarChar(100)
+  aggregateType String       @map("aggregate_type") @db.VarChar(100)
+  aggregateId   String       @map("aggregate_id") @db.VarChar(100)
+  payload       Json         @db.JsonB
+  status        OutboxStatus @default(PENDING)
+  retryCount    Int          @default(0) @map("retry_count")
+  lastError     String?      @map("last_error") @db.VarChar(500)
+  processedAt   DateTime?    @map("processed_at") @db.Timestamptz(6)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([status, createdAt], name: "idx_outbox_events_status_created")
+  @@index([aggregateType, aggregateId], name: "idx_outbox_events_aggregate")
+  @@map("outbox_events")
 }
 
 
