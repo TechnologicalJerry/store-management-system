@@ -3,6 +3,7 @@ import type { ProductRepository } from './product.repository.js';
 import type { CategoryRepository } from '../categories/category.repository.js';
 import { BadRequestError, ConflictError, NotFoundError } from '../../common/errors/app-error.js';
 import { buildPaginatedResponse, parsePagination } from '../../common/utils/pagination.js';
+import { getCacheService } from '../../infrastructure/redis/cache.service.js';
 import type {
   CreateProductDto,
   CreateProductVariantDto,
@@ -162,11 +163,19 @@ export class ProductService {
   }
 
   public async getProductById(productId: string): Promise<ProductResponseDto> {
-    const product = await this.productRepo.findById(productId);
-    if (!product) {
-      throw new NotFoundError(`Product with ID '${productId}' not found.`);
-    }
-    return this.formatProduct(product);
+    const cache = getCacheService();
+    const cacheKey = cache.buildKey('catalog:product', productId);
+    return cache.getOrSet(
+      cacheKey,
+      async () => {
+        const product = await this.productRepo.findById(productId);
+        if (!product) {
+          throw new NotFoundError(`Product with ID '${productId}' not found.`);
+        }
+        return this.formatProduct(product);
+      },
+      { ttlSeconds: cache.getProductTtl() }
+    );
   }
 
   public async listProducts(query: ProductQueryDto): Promise<PaginatedProductsResponse> {
@@ -240,6 +249,9 @@ export class ProductService {
       ...(input.categoryId !== undefined ? { category: { connect: { id: input.categoryId } } } : {}),
     });
 
+    // Invalidate product cache after successful database update
+    void getCacheService().invalidateProduct(productId).catch(() => {});
+
     return this.formatProduct(updated);
   }
 
@@ -255,6 +267,9 @@ export class ProductService {
     const updated = await this.productRepo.update(productId, {
       status: input.status,
     });
+
+    // Invalidate product cache after status update
+    void getCacheService().invalidateProduct(productId).catch(() => {});
 
     return this.formatProduct(updated);
   }
