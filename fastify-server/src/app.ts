@@ -21,6 +21,8 @@ import { supplierRoutes } from './modules/suppliers/index.js';
 import { procurementRoutes, goodsReceiptRoutes } from './modules/procurement/index.js';
 import { saleRoutes, receiptRoutes } from './modules/sales/index.js';
 import { paymentRoutes } from './modules/payments/index.js';
+import { reportRoutes } from './modules/reports/index.js';
+import { getRedisClient } from './infrastructure/redis/redis-client.js';
 
 
 export interface BuildAppOptions {
@@ -102,6 +104,23 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         message: 'PostgreSQL database connection is unavailable',
       };
     });
+
+    // Register Redis cache readiness check (Stage 8)
+    healthService.registerReadinessCheck('redis', async () => {
+      const redisClient = getRedisClient();
+      const health = await redisClient.getHealth();
+      if (health.isConnected) {
+        return {
+          status: 'up',
+          message: health.message,
+          latencyMs: health.latencyMs,
+        };
+      }
+      return {
+        status: health.status === 'degraded' ? 'degraded' : 'down',
+        message: health.message,
+      };
+    });
   }
 
   // 6. Register Versioned API Routes under API Prefix (e.g. /api/v1)
@@ -142,10 +161,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         await apiV1.register(saleRoutes, { prefix: '/sales' });
         await apiV1.register(paymentRoutes, { prefix: '/payments' });
         await apiV1.register(receiptRoutes, { prefix: '/receipts' });
+
+        // Stage 8: Reporting & Analytics Endpoints
+        await apiV1.register(reportRoutes, { prefix: '/reports' });
       }
     },
     { prefix: env.API_PREFIX }
   );
+
+  // Graceful shutdown hook for ephemeral caching layer (Stage 8)
+  app.addHook('onClose', async () => {
+    await getRedisClient().disconnect();
+  });
 
   return app;
 }
