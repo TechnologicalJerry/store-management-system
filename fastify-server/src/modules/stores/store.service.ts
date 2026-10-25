@@ -2,6 +2,7 @@ import type { Store } from '@prisma/client';
 import type { StoreRepository } from './store.repository.js';
 import { ConflictError, NotFoundError } from '../../common/errors/app-error.js';
 import { buildPaginatedResponse, parsePagination } from '../../common/utils/pagination.js';
+import { getCacheService } from '../../infrastructure/redis/cache.service.js';
 import type {
   CreateStoreDto,
   PaginatedStoresResponse,
@@ -63,11 +64,19 @@ export class StoreService {
   }
 
   public async getStoreById(storeId: string): Promise<StoreResponseDto> {
-    const store = await this.storeRepo.findById(storeId);
-    if (!store) {
-      throw new NotFoundError(`Store with ID '${storeId}' not found.`);
-    }
-    return this.formatStore(store);
+    const cache = getCacheService();
+    const cacheKey = cache.buildKey('store:meta', storeId);
+    return cache.getOrSet(
+      cacheKey,
+      async () => {
+        const store = await this.storeRepo.findById(storeId);
+        if (!store) {
+          throw new NotFoundError(`Store with ID '${storeId}' not found.`);
+        }
+        return this.formatStore(store);
+      },
+      { ttlSeconds: cache.getStoreTtl() }
+    );
   }
 
   public async listStores(query: StoreQueryDto): Promise<PaginatedStoresResponse> {
@@ -116,6 +125,9 @@ export class StoreService {
       ...(input.timezone !== undefined ? { timezone: input.timezone.trim() } : {}),
     });
 
+    // Invalidate store cache after update
+    void getCacheService().invalidateStore(storeId).catch(() => {});
+
     return this.formatStore(updated);
   }
 
@@ -126,6 +138,10 @@ export class StoreService {
     }
 
     const updated = await this.storeRepo.update(storeId, { status });
+
+    // Invalidate store cache after status change
+    void getCacheService().invalidateStore(storeId).catch(() => {});
+
     return this.formatStore(updated);
   }
 }
