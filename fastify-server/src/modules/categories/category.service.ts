@@ -2,6 +2,7 @@ import type { ProductCategory } from '@prisma/client';
 import type { CategoryRepository } from './category.repository.js';
 import { BadRequestError, ConflictError, NotFoundError } from '../../common/errors/app-error.js';
 import { buildPaginatedResponse, parsePagination } from '../../common/utils/pagination.js';
+import { getCacheService } from '../../infrastructure/redis/cache.service.js';
 import type {
   CategoryQueryDto,
   CategoryResponseDto,
@@ -74,11 +75,19 @@ export class CategoryService {
   }
 
   public async getCategoryById(categoryId: string): Promise<CategoryResponseDto> {
-    const category = await this.categoryRepo.findById(categoryId);
-    if (!category) {
-      throw new NotFoundError(`Category with ID '${categoryId}' not found.`);
-    }
-    return this.formatCategory(category);
+    const cache = getCacheService();
+    const cacheKey = cache.buildKey('catalog:category', categoryId);
+    return cache.getOrSet(
+      cacheKey,
+      async () => {
+        const category = await this.categoryRepo.findById(categoryId);
+        if (!category) {
+          throw new NotFoundError(`Category with ID '${categoryId}' not found.`);
+        }
+        return this.formatCategory(category);
+      },
+      { ttlSeconds: cache.getProductTtl() }
+    );
   }
 
   public async listCategories(query: CategoryQueryDto): Promise<PaginatedCategoriesResponse> {
@@ -169,6 +178,9 @@ export class CategoryService {
         : {}),
     });
 
+    // Invalidate category cache after update
+    void getCacheService().invalidateCategory(categoryId).catch(() => {});
+
     return this.formatCategory(updated);
   }
 
@@ -184,6 +196,9 @@ export class CategoryService {
     const updated = await this.categoryRepo.update(categoryId, {
       status: input.status,
     });
+
+    // Invalidate category cache after status change
+    void getCacheService().invalidateCategory(categoryId).catch(() => {});
 
     return this.formatCategory(updated);
   }
@@ -211,5 +226,8 @@ export class CategoryService {
     }
 
     await this.categoryRepo.delete(categoryId);
+
+    // Invalidate category cache after deletion
+    void getCacheService().invalidateCategory(categoryId).catch(() => {});
   }
 }
