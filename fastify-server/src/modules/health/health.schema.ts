@@ -79,3 +79,35 @@ export const readinessSchema: FastifySchema = {
     },
   },
 };
+
+/**
+ * Route schema for GET /health/diagnostics (Restricted Admin Probe)
+ */
+export const diagnosticsSchema: FastifySchema = {
+  description: 'Restricted administrative diagnostics providing runtime state, memory, and subsystem health.',
+  tags: ['Health'],
+  summary: 'Administrative system diagnostics',
+  response: {
+    200: {
+      description: 'System diagnostics report.',
+      type: 'object',
+      additionalProperties: true,
+    },
+  },
+};
+
+/**
+ * Route schema for GET /health/metrics
+ */
+export const metricsSchema: FastifySchema = {
+  description: 'Operational metrics including HTTP request counts, latency, and cache hit ratios.',
+  tags: ['Health'],
+  summary: 'Operational metrics summary',
+  response: {
+    200: {
+      description: 'Operational metrics summary payload.',
+      type: 'object',
+      additionalProperties: true,
+    },
+  },
+};
