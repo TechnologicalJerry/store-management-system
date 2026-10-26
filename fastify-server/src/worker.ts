@@ -94,8 +94,12 @@ async function bootstrapWorker(): Promise<void> {
   });
 }
 
-// Bootstrap standalone worker if this module is directly executed
-if (process.argv[1] && process.argv[1].endsWith('worker.ts')) {
+// Bootstrap standalone worker if this module is directly executed (dev with tsx or prod with node)
+const isDirectlyExecuted =
+  process.argv[1] &&
+  (process.argv[1].endsWith('worker.ts') || process.argv[1].endsWith('worker.js'));
+
+if (isDirectlyExecuted) {
   bootstrapWorker().catch(err => {
     logger.fatal({ err: (err as Error).message }, 'Failed to start background worker service');
     process.exit(1);
