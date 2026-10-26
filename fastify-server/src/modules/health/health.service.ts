@@ -6,26 +6,44 @@ import type {
 
 export type ReadinessCheckFn = () => Promise<ComponentHealthCheck> | ComponentHealthCheck;
 
+export interface RegisteredCheck {
+  checkFn: ReadinessCheckFn;
+  isCritical: boolean;
+}
+
 /**
- * HealthService manages process liveness and extensible readiness probes.
+ * HealthService manages process liveness, extensible readiness probes,
+ * and restricted operational diagnostics.
  */
 export class HealthService {
-  private readonly readinessChecks = new Map<string, ReadinessCheckFn>();
+  private readonly readinessChecks = new Map<string, RegisteredCheck>();
 
   constructor() {
     // Foundational readiness check: validates process runtime health
-    this.registerReadinessCheck('system', () => ({
-      status: 'up',
-      message: 'Core application system is healthy and ready to accept traffic',
-    }));
+    this.registerReadinessCheck(
+      'system',
+      () => ({
+        status: 'up',
+        message: 'Core application system is healthy and ready to accept traffic',
+      }),
+      true
+    );
   }
 
   /**
-   * Registers a dependency check callback (e.g. PostgreSQL, Redis, external APIs).
-   * Future stages will leverage this method without modifying the core health architecture.
+   * Registers a dependency check callback.
+   * @param name Unique dependency identifier (e.g. 'database', 'redis')
+   * @param checkFn Function returning ComponentHealthCheck
+   * @param isCritical When true, dependency outage marks entire application unready (503).
+   *                   When false (e.g. ephemeral Redis cache), failure is reported as degraded
+   *                   without blocking core API readiness.
    */
-  public registerReadinessCheck(name: string, checkFn: ReadinessCheckFn): void {
-    this.readinessChecks.set(name, checkFn);
+  public registerReadinessCheck(
+    name: string,
+    checkFn: ReadinessCheckFn,
+    isCritical = true
+  ): void {
+    this.readinessChecks.set(name, { checkFn, isCritical });
   }
 
   /**
@@ -53,10 +71,10 @@ export class HealthService {
     const checks: Record<string, ComponentHealthCheck> = {};
     let isReady = true;
 
-    for (const [name, checkFn] of this.readinessChecks.entries()) {
+    for (const [name, entry] of this.readinessChecks.entries()) {
       try {
         const start = performance.now();
-        const result = await checkFn();
+        const result = await entry.checkFn();
         const latencyMs = Math.round((performance.now() - start) * 100) / 100;
 
         checks[name] = {
@@ -65,12 +83,19 @@ export class HealthService {
         };
 
         if (result.status === 'down') {
-          isReady = false;
+          // Non-critical dependencies (e.g. Redis cache) degrade without taking down API readiness
+          if (entry.isCritical) {
+            isReady = false;
+          } else {
+            checks[name].status = 'degraded';
+          }
         }
       } catch (error) {
-        isReady = false;
+        if (entry.isCritical) {
+          isReady = false;
+        }
         checks[name] = {
-          status: 'down',
+          status: entry.isCritical ? 'down' : 'degraded',
           message: error instanceof Error ? error.message : 'Component check failed',
         };
       }
@@ -84,6 +109,28 @@ export class HealthService {
         uptime: Math.floor(process.uptime()),
         checks,
       },
+    };
+  }
+
+  /**
+   * Gathers non-sensitive runtime diagnostics for authorized administrative review.
+   */
+  public async getDiagnostics(additional?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const memory = process.memoryUsage();
+    return {
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      process: {
+        pid: process.pid,
+        nodeVersion: process.version,
+        memory: {
+          heapUsedMb: Math.round((memory.heapUsed / 1024 / 1024) * 100) / 100,
+          heapTotalMb: Math.round((memory.heapTotal / 1024 / 1024) * 100) / 100,
+          rssMb: Math.round((memory.rss / 1024 / 1024) * 100) / 100,
+        },
+      },
+      ...additional,
     };
   }
 }
