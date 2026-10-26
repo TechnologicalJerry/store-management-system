@@ -76,6 +76,39 @@ export const envSchema = z
         return val;
       }, z.array(z.string().min(1, 'CORS origin item cannot be empty')).min(1, 'At least one CORS origin must be configured'))
       .default(['http://localhost:3000', 'http://localhost:5173']),
+    APP_NAME: z.string().min(1, 'APP_NAME must not be empty').default('store-management-system'),
+    API_PUBLIC_URL: z.string().url('API_PUBLIC_URL must be a valid URL').optional(),
+    TRUST_PROXY: z.preprocess(val => (val !== undefined ? val : false), booleanFromEnv(false)),
+    BODY_LIMIT_BYTES: z
+      .preprocess(
+        val => (typeof val === 'string' ? parseInt(val, 10) : val),
+        z
+          .number({ invalid_type_error: 'BODY_LIMIT_BYTES must be a number' })
+          .int()
+          .min(1024, 'BODY_LIMIT_BYTES must be at least 1KB')
+          .max(10485760, 'BODY_LIMIT_BYTES cannot exceed 10MB')
+      )
+      .default(1048576), // 1MB default
+    REQUEST_TIMEOUT_MS: z
+      .preprocess(
+        val => (typeof val === 'string' ? parseInt(val, 10) : val),
+        z
+          .number({ invalid_type_error: 'REQUEST_TIMEOUT_MS must be a number' })
+          .int()
+          .min(1000, 'REQUEST_TIMEOUT_MS must be at least 1000ms')
+          .max(120000, 'REQUEST_TIMEOUT_MS cannot exceed 120000ms')
+      )
+      .default(15000), // 15 seconds
+    SHUTDOWN_TIMEOUT_MS: z
+      .preprocess(
+        val => (typeof val === 'string' ? parseInt(val, 10) : val),
+        z
+          .number({ invalid_type_error: 'SHUTDOWN_TIMEOUT_MS must be a number' })
+          .int()
+          .min(1000, 'SHUTDOWN_TIMEOUT_MS must be at least 1000ms')
+          .max(60000, 'SHUTDOWN_TIMEOUT_MS cannot exceed 60000ms')
+      )
+      .default(10000), // 10 seconds
     SWAGGER_ENABLED: z.preprocess(val => {
       if (val === undefined || val === '') {
         // Default based on NODE_ENV if available
