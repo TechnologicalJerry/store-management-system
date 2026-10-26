@@ -14,17 +14,27 @@ export async function gracefulShutdown(signal: string): Promise<void> {
   }
   isShuttingDown = true;
 
+  // Bounded shutdown timer guarantees process termination if cleanup hangs
+  const shutdownTimer = setTimeout(() => {
+    console.error('CRITICAL: Graceful shutdown timed out. Forcing process termination.');
+    process.exit(1);
+  }, 10000);
+  shutdownTimer.unref();
+
   if (app) {
     app.log.info(`Received ${signal}. Initiating graceful shutdown...`);
     try {
       await app.close();
+      clearTimeout(shutdownTimer);
       app.log.info('Application HTTP server and resources closed cleanly.');
       process.exit(0);
     } catch (error) {
+      clearTimeout(shutdownTimer);
       app.log.error({ err: error }, 'Error occurred during graceful shutdown');
       process.exit(1);
     }
   } else {
+    clearTimeout(shutdownTimer);
     process.exit(0);
   }
 }
