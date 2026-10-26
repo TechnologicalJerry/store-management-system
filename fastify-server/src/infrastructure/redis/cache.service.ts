@@ -2,6 +2,7 @@ import { getEnv } from '../../config/env.js';
 import { logger } from '../../common/utils/logger.js';
 import type { IRedisClient, CacheOptions } from './redis.types.js';
 import { getRedisClient } from './redis-client.js';
+import { getMetricsService } from '../observability/metrics.service.js';
 
 /**
  * CacheService
@@ -47,12 +48,16 @@ export class CacheService {
     try {
       const raw = await this.redis.get(key);
       if (!raw) {
+        getMetricsService().recordCacheMiss();
         return null;
       }
 
       try {
-        return JSON.parse(raw) as T;
+        const parsed = JSON.parse(raw) as T;
+        getMetricsService().recordCacheHit();
+        return parsed;
       } catch (parseErr) {
+        getMetricsService().recordCacheMiss();
         logger.warn(
           { key, err: (parseErr as Error).message },
           'Malformed JSON detected in cache; purging corrupted key'
@@ -62,6 +67,7 @@ export class CacheService {
         return null;
       }
     } catch (err) {
+      getMetricsService().recordCacheMiss();
       logger.warn(
         { key, err: (err as Error).message },
         'Cache read error; falling back to authoritative database'
