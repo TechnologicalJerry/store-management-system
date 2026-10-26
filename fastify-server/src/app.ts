@@ -23,6 +23,7 @@ import { saleRoutes, receiptRoutes } from './modules/sales/index.js';
 import { paymentRoutes } from './modules/payments/index.js';
 import { reportRoutes } from './modules/reports/index.js';
 import { getRedisClient } from './infrastructure/redis/redis-client.js';
+import { getMetricsService } from './infrastructure/observability/metrics.service.js';
 
 
 export interface BuildAppOptions {
@@ -53,11 +54,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     logger: options.fastifyOptions?.logger ?? createLoggerOptions(env),
     genReqId: req => generateOrValidateRequestId(req.headers['x-request-id']),
     requestIdHeader: 'x-request-id',
-    bodyLimit: 1048576, // 1MB maximum JSON/payload limit
-    trustProxy: false, // Strict proxy trust policy; never trust arbitrary forwarded headers
+    bodyLimit: env.BODY_LIMIT_BYTES,
+    trustProxy: env.TRUST_PROXY,
     connectionTimeout: 10000,
     keepAliveTimeout: 5000,
-    requestTimeout: 15000,
+    requestTimeout: env.REQUEST_TIMEOUT_MS,
     ...options.fastifyOptions,
   });
 
@@ -105,22 +106,26 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       };
     });
 
-    // Register Redis cache readiness check (Stage 8)
-    healthService.registerReadinessCheck('redis', async () => {
-      const redisClient = getRedisClient();
-      const health = await redisClient.getHealth();
-      if (health.isConnected) {
+    // Register Redis cache readiness check (Stage 8) - non-critical (fail-open)
+    healthService.registerReadinessCheck(
+      'redis',
+      async () => {
+        const redisClient = getRedisClient();
+        const health = await redisClient.getHealth();
+        if (health.isConnected) {
+          return {
+            status: 'up',
+            message: health.message,
+            latencyMs: health.latencyMs,
+          };
+        }
         return {
-          status: 'up',
+          status: 'degraded',
           message: health.message,
-          latencyMs: health.latencyMs,
         };
-      }
-      return {
-        status: health.status === 'degraded' ? 'degraded' : 'down',
-        message: health.message,
-      };
-    });
+      },
+      false
+    );
   }
 
   // 6. Register Versioned API Routes under API Prefix (e.g. /api/v1)
@@ -168,6 +173,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     },
     { prefix: env.API_PREFIX }
   );
+
+  // Observability hook: Track response metrics without recording sensitive route variables (Stage 9)
+  app.addHook('onResponse', async (request, reply) => {
+    const route = request.routeOptions?.url || request.url.split('?')[0];
+    const duration = reply.elapsedTime;
+    getMetricsService().recordHttpRequest(request.method, route, reply.statusCode, duration);
+  });
 
   // Graceful shutdown hook for ephemeral caching layer (Stage 8)
   app.addHook('onClose', async () => {
