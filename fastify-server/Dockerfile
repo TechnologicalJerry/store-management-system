@@ -28,6 +28,9 @@ RUN npx prisma generate && npm run build
 FROM node:22-alpine AS runner
 WORKDIR /app
 
+# Install tini for reliable PID 1 signal forwarding and zombie process reaping
+RUN apk add --no-cache tini
+
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3000
@@ -44,6 +47,9 @@ COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 # Copy compiled JavaScript output from builder stage
 COPY --from=builder /app/dist ./dist
 
+# Ensure non-root node user owns application files
+RUN chown -R node:node /app
+
 # Switch to standard non-root user provided by node alpine image
 USER node
 
@@ -54,5 +60,8 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 3000) + '/api/v1/health/live').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
-# Start the application using compiled JavaScript entrypoint
+# Use tini as init process to handle signals gracefully
+ENTRYPOINT ["/sbin/tini", "--"]
+
+# Start the application using compiled JavaScript entrypoint (overridden for worker)
 CMD ["node", "dist/server.js"]
