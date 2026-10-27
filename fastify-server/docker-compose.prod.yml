@@ -1,0 +1,192 @@
+# ==============================================================================
+# Production Docker Compose Configuration — Store Management System
+# ==============================================================================
+# Hardened configuration for production deployment:
+# - PostgreSQL and Redis ports are NOT exposed to the host network
+# - Dedicated one-shot migration service runs `prisma migrate deploy` before API startup
+# - API and Worker processes run in separate containers with resource limits
+# - Non-root execution, bounded log rotation, and restart policies enabled
+# ==============================================================================
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: store-management-postgres-prod
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-store_management}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Database password must be set}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal-backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-store_management}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: store-management-redis-prod
+    restart: always
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:-""}
+      --maxmemory 256mb
+      --maxmemory-policy volatile-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - internal-backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  prisma-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: store-management-migration-runner
+    restart: "no"
+    command: ["npx", "prisma", "migrate", "deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal-backend
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-store_management}?schema=public
+
+  fastify-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: store-management-fastify-api-prod
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      prisma-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${PORT:-3000}:3000"
+    networks:
+      - internal-backend
+    environment:
+      - NODE_ENV=production
+      - APP_NAME=store-management-system
+      - HOST=0.0.0.0
+      - PORT=3000
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - API_PREFIX=${API_PREFIX:-/api/v1}
+      - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be explicitly specified in production}
+      - SWAGGER_ENABLED=false
+      - TRUST_PROXY=${TRUST_PROXY:-true}
+      - BODY_LIMIT_BYTES=${BODY_LIMIT_BYTES:-1048576}
+      - REQUEST_TIMEOUT_MS=${REQUEST_TIMEOUT_MS:-15000}
+      - SHUTDOWN_TIMEOUT_MS=${SHUTDOWN_TIMEOUT_MS:-10000}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-store_management}?schema=public
+      - DB_POOL_MAX=${DB_POOL_MAX:-20}
+      - DB_CONNECTION_TIMEOUT_MS=${DB_CONNECTION_TIMEOUT_MS:-5000}
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET must be set}
+      - JWT_ACCESS_TTL=${JWT_ACCESS_TTL:-15m}
+      - JWT_ISSUER=${JWT_ISSUER:-store-management-system}
+      - JWT_AUDIENCE=${JWT_AUDIENCE:-store-management-system-api}
+      - REFRESH_TOKEN_TTL_DAYS=${REFRESH_TOKEN_TTL_DAYS:-7}
+      - MAX_ACTIVE_SESSIONS=${MAX_ACTIVE_SESSIONS:-2}
+      - AUTH_COOKIE_NAME=${AUTH_COOKIE_NAME:-refresh_token}
+      - COOKIE_SECRET=${COOKIE_SECRET:?COOKIE_SECRET must be set}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-""}
+      - CACHE_DEFAULT_TTL_SECONDS=${CACHE_DEFAULT_TTL_SECONDS:-300}
+      - CACHE_CATALOG_TTL_SECONDS=${CACHE_CATALOG_TTL_SECONDS:-600}
+      - CACHE_STORE_TTL_SECONDS=${CACHE_STORE_TTL_SECONDS:-1800}
+      - WORKER_ENABLED=false
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health/live').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  fastify-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: store-management-fastify-worker-prod
+    command: ["node", "dist/worker.js"]
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      prisma-migrate:
+        condition: service_completed_successfully
+    networks:
+      - internal-backend
+    environment:
+      - NODE_ENV=production
+      - APP_NAME=store-management-system-worker
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-store_management}?schema=public
+      - DB_POOL_MAX=${DB_POOL_MAX:-10}
+      - DB_CONNECTION_TIMEOUT_MS=${DB_CONNECTION_TIMEOUT_MS:-5000}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-""}
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-5}
+      - WORKER_ENABLED=true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  postgres_data:
+    name: store-management-postgres-prod-data
+  redis_data:
+    name: store-management-redis-prod-data
+
+networks:
+  internal-backend:
+    name: store-management-internal-network
+    driver: bridge
