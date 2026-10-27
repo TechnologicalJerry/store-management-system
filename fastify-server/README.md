@@ -13,6 +13,11 @@ The Store Management System backend is engineered to support enterprise-grade re
 - **Stage 3 (Authentication, Sessions & Authorization):** Established Argon2id credential hashing, short-lived JWT access tokens, refresh token rotation with SHA-256 storage and replay/theft detection, transactional FIFO session management (max 2 active sessions), dual-transport cookie/bearer security, and RBAC role-to-permission route guards.
 - **Stage 4 (Store Management, User Administration & Product Catalog):** Established retail store branches, store-scoped staff memberships, global user administration with final-administrator safeguards, hierarchical category taxonomies with cycle detection, product catalog management, sellable SKU variants, exact Decimal pricing, and multi-store access control.
 - **Stage 5 (Inventory Management):** Established store-specific inventory balances with exact decimal quantities (`DECIMAL(12, 4)`), immutable append-only movement ledger, row-level concurrency locking (`SELECT ... FOR UPDATE`), idempotent stock receiving and manual adjustments, stock reservations with availability derivations, and inter-store stock transfers with multi-step lifecycle tracking.
+- **Stage 6 (Suppliers and Procurement):** Established vendor management, item-level supplier offerings with MOQs and agreed pricing, purchase order lifecycle with separation of duties, and physical goods receiving with discrepancy recording and atomic inventory updates.
+- **Stage 7 (Sales and Payment Workflows):** Established point-of-sale direct checkout with server-side authoritative pricing, immutable order snapshots, deadlock-safe inventory row-locking, provider-agnostic payment boundary (`IPaymentProvider`), cash tender with change calculation, digital gateway simulation, customer receipts, and controlled refund lifecycles.
+- **Stage 8 (Reporting, Redis Caching & Background Jobs):** Established Redis ephemeral cache-aside acceleration with stampede coalescing, exact-decimal database aggregation reporting (sales summary, top products, payment reconciliation, inventory valuation, low-stock alerts, procurement), persistent async report generation tickets, and standalone background worker processes with exponential backoff.
+- **Stage 9 (Testing, Security & Observability):** Established Vitest test harness with in-memory Fastify injection, comprehensive security regression and concurrency test suites, enhanced Pino credential/card redaction, fail-open readiness probes, protected administrative diagnostics, and in-memory Prometheus/JSON metrics collection.
+- **Stage 10 (Production Readiness & Deployment):** Established multi-stage non-root Dockerfile with tini init, isolated production Compose specification, GitHub Actions CI/CD pipeline, bounded graceful shutdown, environment secrets enforcement, database migration and zero-downtime expand-contract strategy, alerting runbook, and comprehensive post-Stage 10 final verification checklist.
 
 ---
 
@@ -38,7 +43,9 @@ The Store Management System backend is engineered to support enterprise-grade re
   - Rate Limiting & DDoS Mitigation: `@fastify/rate-limit` `v10.2.2`
 - **Testing:** [Vitest](https://vitest.dev/) `v3.0.5` with Fastify injection
 - **Code Quality:** ESLint `v9.20.1` (Flat Config), Prettier `v3.5.1`
-- **Containerization:** Multi-stage Dockerfile and Docker Compose with PostgreSQL 17
+- **Cache Acceleration:** [Redis](https://redis.io/) `7.4` (Alpine) with resilient native fallback
+- **Background Queues:** BullMQ-compatible queue infrastructure with retry backoff and concurrency controls
+- **Containerization:** Multi-stage Dockerfile and Docker Compose with PostgreSQL 17, Redis 7.4, and Worker services
 
 ---
 
@@ -58,11 +65,22 @@ fastify-server/
 │       │   └── migration.sql          # Stage 4 Store & Catalog DDL migration
 │       ├── 20261022000000_add_inventory_models/
 │       │   └── migration.sql          # Stage 5 Inventory & Transfers DDL migration
-│       └── 20261023000000_add_procurement_models/
-│           └── migration.sql          # Stage 6 Suppliers & Procurement DDL migration
+│       ├── 20261023000000_add_procurement_models/
+│       │   └── migration.sql          # Stage 6 Suppliers & Procurement DDL migration
+│       ├── 20261024000000_add_sales_and_payment_models/
+│       │   └── migration.sql          # Stage 7 Sales & Payment Workflows DDL migration
+│       └── 20261025000000_add_reporting_and_job_models/
+│           └── migration.sql          # Stage 8 Reporting & Job Models DDL migration
 ├── src/
 │   ├── app.ts                         # Application factory & plugin composition
 │   ├── server.ts                      # Server bootstrap, signal handling & graceful shutdown
+│   ├── worker.ts                      # Standalone background worker process entrypoint
+│   ├── infrastructure/
+│   │   ├── database/                  # PostgreSQL pool and Prisma plugin
+│   │   ├── redis/                     # Redis client manager and CacheService
+│   │   └── queues/                    # Queue manager and job interfaces
+│   ├── jobs/                          # Typed job processors (report, reconciliation, cleanup)
+│   ├── workers/                       # BaseWorker, ReportWorker, ReconciliationWorker, CleanupWorker
 │   ├── config/
 │   │   └── env.ts                     # Zod-validated environment, database & auth configuration
 │   ├── plugins/
@@ -86,62 +104,38 @@ fastify-server/
 │   │   ├── health/                    # Observability probes (/health/live, /health/ready)
 │   │   ├── auth/                      # Authentication & sessions (/api/v1/auth)
 │   │   ├── stores/                    # Store management (/api/v1/stores)
-│   │   │   ├── store.types.ts
-│   │   │   ├── store.schemas.ts
-│   │   │   ├── store.repository.ts
-│   │   │   ├── store.service.ts
-│   │   │   ├── store.routes.ts
-│   │   │   └── index.ts
 │   │   ├── users/                     # User admin & memberships (/api/v1/users, /stores/:id/members)
-│   │   │   ├── user.types.ts
-│   │   │   ├── user.schemas.ts
-│   │   │   ├── user.repository.ts
-│   │   │   ├── user.service.ts
-│   │   │   ├── user.routes.ts
-│   │   │   └── index.ts
 │   │   ├── categories/                # Product categories (/api/v1/categories)
-│   │   │   ├── category.types.ts
-│   │   │   ├── category.schemas.ts
-│   │   │   ├── category.repository.ts
-│   │   │   ├── category.service.ts
-│   │   │   ├── category.routes.ts
-│   │   │   └── index.ts
 │   │   ├── products/                  # Product catalog & variants (/api/v1/products, /variants)
-│   │   │   ├── product.types.ts
-│   │   │   ├── product.schemas.ts
-│   │   │   ├── product.repository.ts
-│   │   │   ├── product.service.ts
-│   │   │   ├── product.routes.ts
-│   │   │   └── index.ts
 │   │   ├── inventory/                 # Inventory, movements & transfers (/stores/:id/inventory, /transfers)
-│   │   │   ├── inventory.types.ts
-│   │   │   ├── inventory.errors.ts
-│   │   │   ├── inventory.schemas.ts
-│   │   │   ├── inventory.repository.ts
-│   │   │   ├── inventory.service.ts
-│   │   │   ├── inventory-reservation.service.ts
-│   │   │   ├── inventory-transfer.service.ts
-│   │   │   ├── inventory.routes.ts
-│   │   │   ├── inventory-transfer.routes.ts
-│   │   │   └── index.ts
 │   │   ├── suppliers/                 # Supplier directory & vendor catalogue (/api/v1/suppliers)
-│   │   │   ├── supplier.constants.ts
-│   │   │   ├── supplier.types.ts
-│   │   │   ├── supplier.errors.ts
-│   │   │   ├── supplier.schemas.ts
-│   │   │   ├── supplier.repository.ts
-│   │   │   ├── supplier.service.ts
-│   │   │   ├── supplier.routes.ts
+│   │   ├── procurement/               # Purchase orders & goods receipts (/api/v1/purchase-orders)
+│   │   ├── sales/                     # Sales, direct checkout & receipts (/api/v1/sales, /receipts)
+│   │   └── reports/                   # Reporting & analytics (/api/v1/reports)
+│   │   │   ├── sale.constants.ts
+│   │   │   ├── sale.types.ts
+│   │   │   ├── sale.errors.ts
+│   │   │   ├── sale.schemas.ts
+│   │   │   ├── sale.repository.ts
+│   │   │   ├── sale.service.ts
+│   │   │   ├── checkout.service.ts
+│   │   │   ├── receipt.service.ts
+│   │   │   ├── sale.routes.ts
+│   │   │   ├── receipt.routes.ts
 │   │   │   └── index.ts
-│   │   └── procurement/               # Purchase orders & goods receipts (/api/v1/purchase-orders)
-│   │       ├── procurement.constants.ts
-│   │       ├── procurement.types.ts
-│   │       ├── procurement.errors.ts
-│   │       ├── procurement.schemas.ts
-│   │       ├── procurement.repository.ts
-│   │       ├── purchase-order.service.ts
-│   │       ├── goods-receipt.service.ts
-│   │       ├── procurement.routes.ts
+│   │   └── payments/                  # Payment boundary, providers & refunds (/api/v1/payments)
+│   │       ├── payment.constants.ts
+│   │       ├── payment.types.ts
+│   │       ├── payment.errors.ts
+│   │       ├── payment.schemas.ts
+│   │       ├── payment.repository.ts
+│   │       ├── payment-provider.interface.ts
+│   │       ├── providers/
+│   │       │   ├── cash.provider.ts
+│   │       │   └── mock-digital.provider.ts
+│   │       ├── payment.service.ts
+│   │       ├── refund.service.ts
+│   │       ├── payment.routes.ts
 │   │       └── index.ts
 │   ├── infrastructure/
 │   │   ├── index.ts                   # Architectural boundary re-exports
@@ -172,7 +166,16 @@ fastify-server/
 │   │   ├── user.service.test.ts       # User admin, super admin safeguard, memberships
 │   │   ├── category.service.test.ts   # Category hierarchy, slug, and cycle detection
 │   │   ├── product.service.test.ts    # Decimal pricing, SKU normalization, variants
-│   │   └── store-authorization.test.ts # Multi-store access control guard
+│   │   ├── store-authorization.test.ts # Multi-store access control guard
+│   │   ├── supplier.service.test.ts   # Supplier CRUD, soft deletes, catalog management
+│   │   ├── purchase-order.service.test.ts # PO creation, decimal math, state machine
+│   │   ├── goods-receipt.service.test.ts # Physical goods receiving & inventory updates
+│   │   ├── sales.state-machine.test.ts # Sales, payments & refunds state machines
+│   │   ├── sale.service.test.ts       # Sale creation, authoritative pricing, cancel
+│   │   ├── checkout.service.test.ts   # Direct checkout, stock deduction, cash change
+│   │   ├── payment.service.test.ts    # Payment capture, void, balance checks
+│   │   ├── refund.service.test.ts     # Refund calculations, state updates, isolation
+│   │   └── receipt.service.test.ts    # Receipt generation, freezing, retrieval
 │   └── integration/
 │       ├── app.test.ts
 │       ├── health.test.ts
@@ -184,10 +187,19 @@ fastify-server/
 │       ├── stores.routes.test.ts      # Store management endpoints
 │       ├── users.routes.test.ts       # User admin & store membership endpoints
 │       ├── categories.routes.test.ts  # Category hierarchy endpoints
-│       └── products.routes.test.ts    # Product and variant catalog endpoints
+│       ├── products.routes.test.ts    # Product and variant catalog endpoints
+│       ├── suppliers.routes.test.ts   # Supplier and supplier product endpoints
+│       ├── purchase-orders.routes.test.ts # Purchase order lifecycle endpoints
+│       ├── goods-receipts.routes.test.ts  # Goods receiving endpoints
+│       ├── sales.routes.test.ts       # Sales, checkout, and cancellation endpoints
+│       ├── payments.routes.test.ts    # Payment recording, capture, void, and refunds
+│       └── receipts.routes.test.ts    # Customer receipt retrieval endpoints
 ├── docs/
 │   ├── implementation-status.md       # Implementation tracker and verification log
-│   └── transaction-strategy.md        # Transaction boundaries, isolation & concurrency guide
+│   ├── transaction-strategy.md        # Transaction boundaries, isolation & concurrency guide
+│   ├── inventory-concurrency-and-transfers.md # Inventory movements, locking & transfers
+│   ├── procurement-lifecycle-and-receiving.md # Procurement lifecycle & receiving guide
+│   └── sales-checkout-and-payment-processing.md # Sales, POS checkout & payment processing
 ├── .env.example                       # Documented environment variables template
 ├── package.json                       # Project manifests and lifecycle scripts
 └── README.md                          # Project documentation
@@ -359,14 +371,76 @@ cp .env.example .env
 
 ---
 
-## 9. Health and Readiness Observability
+## 9. Sales, Checkout and Payment API Endpoints (Stage 7)
 
-- `GET /api/v1/health/live`: Fast process liveness probe.
-- `GET /api/v1/health/ready`: Traffic readiness probe with bounded 3,000ms PostgreSQL ping (`SELECT 1`). Returns `200 OK` or `503 Service Unavailable`.
+| Method | Endpoint | Required Permission | Description |
+|---|---|---|---|
+| `POST` | `/api/v1/sales` | `sales:create` | Creates a new draft sale with server-side authoritative pricing calculations. |
+| `GET` | `/api/v1/sales` | `sales:read` | Lists sales with filtering by store, status, cashier, date ranges, and pagination. |
+| `GET` | `/api/v1/sales/:saleId` | `sales:read` | Retrieves detailed sale record with items, payment summaries, and receipts. |
+| `POST` | `/api/v1/sales/checkout` | `sales:checkout` | Atomic point-of-sale direct checkout: locks stock, deducts inventory, settles payment. |
+| `POST` | `/api/v1/sales/:saleId/cancel` | `sales:cancel` | Cancels in-progress sale and atomically restores any deducted stock. |
+| `GET` | `/api/v1/sales/:saleId/receipt` | `receipts:read` | Retrieves the immutable customer receipt for a completed sale. |
+| `POST` | `/api/v1/sales/:saleId/payments` | `payments:record_cash` / `payments:initiate` | Records or initiates a payment attempt on an existing sale. |
+| `GET` | `/api/v1/sales/:saleId/payments` | `payments:read` | Lists all payments associated with a sale. |
+| `GET` | `/api/v1/payments/:paymentId` | `payments:read` | Retrieves payment transaction record by ID. |
+| `POST` | `/api/v1/payments/:paymentId/capture` | `payments:capture` | Captures a previously authorized payment. |
+| `POST` | `/api/v1/payments/:paymentId/void` | `payments:void` | Voids an uncaptured authorized payment. |
+| `POST` | `/api/v1/payments/:paymentId/refunds` | `payments:refund` | Issues a refund against an eligible captured payment. |
+| `GET` | `/api/v1/payments/:paymentId/refunds` | `payments:read` | Lists all refunds recorded for a payment. |
+| `GET` | `/api/v1/receipts/:receiptId` | `receipts:read` | Retrieves an immutable customer receipt by receipt ID. |
 
 ---
 
-## 10. Backend Development Roadmap
+## 10. Reporting, Analytics and Background Job API Endpoints (Stage 8)
+
+| Method | Endpoint | Required Permission | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/reports/sales-summary` | `reports:read` | Compiles gross sales, discounts, refunds, net sales, order counts, and daily series. |
+| `GET` | `/api/v1/reports/top-products` | `reports:read` | Lists top-selling products and variants by quantity sold and gross revenue. |
+| `GET` | `/api/v1/reports/payments` | `reports:read` | Compiles payment settlement breakdown by method, capture totals, and refund counts. |
+| `GET` | `/api/v1/reports/inventory` | `reports:read` | Retrieves inventory valuation (`quantityOnHand * costPrice`), on-hand, and reserved balances. |
+| `GET` | `/api/v1/reports/low-stock` | `reports:read` | Lists items where available stock is at or below the reorder threshold with shortfall. |
+| `GET` | `/api/v1/reports/procurement` | `reports:read` | Summarizes purchase order statuses, ordered vs received quantities, and supplier totals. |
+| `POST` | `/api/v1/reports/async` | `reports:export` | Enqueues asynchronous generation of multi-month reports returning a tracking ticket. |
+| `GET` | `/api/v1/reports/async/:id` | `reports:read` | Polls status and retrieves generated payload for an asynchronous report. |
+
+---
+
+## 11. Health, Diagnostics and Observability
+
+- `GET /api/v1/health/live`: Fast process liveness probe.
+- `GET /api/v1/health/ready`: Fail-open traffic readiness probe:
+  - Critical check: PostgreSQL connectivity (`SELECT 1`). Returns `503 Service Unavailable` if down.
+  - Non-critical check: Redis connectivity (`PING`). Degrades to `status: "degraded"` but returns `200 OK` to keep traffic flowing.
+- `GET /api/v1/health/diagnostics`: Administrative diagnostics providing detailed dependency statuses (PostgreSQL, Redis, Queues). Restricted to `SUPER_ADMIN` and `ADMIN`.
+- `GET /api/v1/health/metrics`: Operational metrics endpoint exporting HTTP request counts, average latency, response status distribution (2xx/4xx/5xx), cache hit ratios, and worker queue backlogs. Supports JSON or Prometheus plain text formatting via `Accept: text/plain`.
+
+---
+
+## 12. Testing and Security Architecture
+
+- **Fastify Injection Testing:** Test suites execute in-memory via `app.inject()`, eliminating network port bindings and firewall popups.
+- **Security Regressions:** Automated tests for cross-store IDOR prevention, RBAC privilege escalation resistance, token tampering rejection, and FIFO session revocation.
+- **Transaction & Concurrency Integrity:** Automated tests ensuring lexicographical variant sorting for deadlock-safe locking, atomic inventory rollback on stock exhaustion, and exact decimal arithmetic.
+- **Credential & Card Redaction:** Expanded Pino redaction masks credit card PANs, CVVs, PINs, bearer/refresh tokens, password hashes, and Redis/database credentials across all logs.
+
+---
+
+## 13. Deployment & Operational Runbooks
+
+Comprehensive production guides are available in the [`docs/deployment/`](file:///d:/GitHub/store-management-system/fastify-server/docs/deployment/) and [`docs/verification/`](file:///d:/GitHub/store-management-system/fastify-server/docs/verification/) directories:
+- **[Production Setup & Architecture](file:///d:/GitHub/store-management-system/fastify-server/docs/deployment/production-setup.md)**: Reverse proxy (Nginx), topology, Docker Compose, Kubernetes.
+- **[Environment Variables & Secrets Reference](file:///d:/GitHub/store-management-system/fastify-server/docs/deployment/environment-variables.md)**: Production environment settings, secret rotation procedures.
+- **[Database Migrations Strategy](file:///d:/GitHub/store-management-system/fastify-server/docs/deployment/database-migrations.md)**: Decoupled migration runner, zero-downtime expand-contract pattern.
+- **[Backup & Disaster Recovery](file:///d:/GitHub/store-management-system/fastify-server/docs/deployment/backup-and-recovery.md)**: PITR, logical dumps, RPO/RTO targets, reconciliation.
+- **[Operations & Alerting Runbook](file:///d:/GitHub/store-management-system/fastify-server/docs/deployment/operations-runbook.md)**: Prometheus alerts, log analysis with jq, incident triage.
+- **[Security Hardening Checklist](file:///d:/GitHub/store-management-system/fastify-server/docs/deployment/security-checklist.md)**: Production security audit, network controls.
+- **[Final Verification Plan](file:///d:/GitHub/store-management-system/fastify-server/docs/verification/final-verification-plan.md)**: Post-Stage 10 execution checklist across all categories (A–G).
+
+---
+
+## 14. Backend Development Roadmap
 
 | Stage | Focus Area | Status |
 |---|---|---|
@@ -376,9 +450,11 @@ cp .env.example .env
 | **Stage 4** | **Store Management, User Administration & Product Catalog** | **Implemented (Pending Verification)** |
 | **Stage 5** | **Inventory Management (Balances, Ledger, Concurrency, Transfers)** | **Implemented (Pending Verification)** |
 | **Stage 6** | **Suppliers and Procurement (Catalog, Orders, Receiving, Concurrency)** | **Implemented (Pending Verification)** |
-| Stage 7 | Sales and Payment Workflows | Remaining |
-| Stage 8 | Reporting, Redis Caching and Background Jobs | Remaining |
-| Stage 9 | Testing, Security and Observability | Remaining |
-| Stage 10 | Production Readiness and Deployment | Remaining |
+| **Stage 7** | **Sales and Payment Workflows (POS Checkout, Payments, Receipts, Refunds)** | **Implemented (Pending Verification)** |
+| **Stage 8** | **Reporting, Redis Caching and Background Jobs (Analytics, Queues, Workers)** | **Implemented (Pending Verification)** |
+| **Stage 9** | **Testing, Security and Observability (Vitest, Hardening, Metrics, Probes)** | **Implemented (Pending Verification)** |
+| **Stage 10** | **Production Readiness & Deployment (Docker, CI/CD, Migrations, Runbooks)** | **Implemented (Pending Final Verification)** |
+
+
 
 
