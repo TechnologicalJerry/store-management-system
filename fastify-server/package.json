@@ -65,5 +65,13 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "allowScripts": {
+    "@prisma/client@6.4.0": true,
+    "@prisma/engines@6.4.0": true,
+    "argon2@0.41.1": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.25.12": true,
+    "prisma@6.4.0": true
   }
 }
